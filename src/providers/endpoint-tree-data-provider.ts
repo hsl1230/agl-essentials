@@ -1,0 +1,40 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import * as vscode from 'vscode';
+import { FeatureNode } from '../models/feature-node';
+import { TreeDataProvider } from './tree-data-provider';
+
+export class EndpointTreeDataProvider extends TreeDataProvider {
+    constructor(private workspaceFolder: string, public readonly middlewareName: string) {
+        super();
+        this.loadData();
+    }
+
+    public get providerName(): string { 
+        return 'Endpoints';
+    }
+    protected loadData() {
+        const customRoutesPath = path.join(this.workspaceFolder, `agl-config-${this.middlewareName}/files/customRoutes.json`);
+        try {
+            const config = JSON.parse(fs.readFileSync(customRoutesPath, 'utf-8'));
+            this.buildEndpointTree(config);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to load endpoint tree: ${error.message}`);
+        }
+
+        return this.treeData;
+    }
+
+    private buildEndpointTree(endpoints: any[]) {
+        this.treeData = { name: 'Root', children: [] };
+        for (const endpoint of endpoints) {
+            const endpointNode: FeatureNode = {
+                name: `${endpoint.method.toUpperCase()} (${endpoint.endpointUri})`,
+                children: [],
+                command: 'aglEssentials.openEndpointDetails',
+                arguments: [endpoint, this.middlewareName]
+            };
+            this.treeData.children.push(endpointNode);
+        }
+    }
+}

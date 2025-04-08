@@ -1,0 +1,17 @@
+<svg 
+  version="1.1" 
+  xmlns="http://www.w3.org/2000/svg" 
+  xmlns:xlink="http://www.w3.org/1999/xlink" 
+  x="0px" 
+  y="0px"
+  width="20px" 
+  height="20px" 
+  viewBox="0 0 20 20" 
+  style="enable-background:new 0 0 20 20;" 
+  xml:space="preserve">
+<g stroke="black" stroke-width="1.5" fill="none">
+  <path d="M6,7 L3,10 L6,13" /> <!-- Left arrow -->
+  <path d="M14,7 L17,10 L14,13" /> <!-- Right arrow -->
+</g>
+<text x="50%" y="15" text-anchor="middle" stroke="black" stroke-width="0.5" fill="none" font-size="5px" font-family="Arial" dy=".3em">AGL</text>
+</svg>

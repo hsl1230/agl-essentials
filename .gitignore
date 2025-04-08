@@ -1,0 +1,12 @@
+node_modules/
+gss-issues/
+coverage/
+file-locks/
+npm-debug.log
+plato/
+test/*.txt
+.idea
+.nyc_output/
+logs/
+out/
+package.json.original
