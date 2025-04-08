@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Endpoint Viewer</title>
+    <link rel="stylesheet" href="style.css">
+    <script>
+        (function (global) {
+            // JSON Viewer Library
+            function showJsonContent(title, jsonData, jsonContentId, itemProcessor, jsonProcessor) {
+                const jsonContentTemplate = `
+                    <div class="json-viewer-content">
+                        <!-- Title bar -->
+                        <div class="json-viewer-header">
+                            <div class="json-viewer-title">${title}</div>
+                        </div>
+
+                        <!-- JSON content and controls -->
+                        <div class="json-viewer-body">
+                            <div class="json-viewer-controls">
+                                <button id="expand-all" title="Expand All">Expand All</button>
+                                <button id="collapse-all" title="Collapse All">Collapse All</button>
+                                <button id="copy-json" title="Copy JSON">Copy JSON</button>
+                            </div>
+                            <div id="json-container" class="json-viewer-container"></div>
+                            <div id="copy-message" class="json-viewer-copy-message">Copied!</div>
+                        </div>
+                    </div>
+                `;
+
+                const jsonContent = document.getElementById(jsonContentId);
+                jsonContent.innerHTML = jsonContentTemplate;
+
+                // Parse JSON if it's a string
+                if (typeof jsonData === 'string') {
+                    try {
+                        jsonData = JSON.parse(jsonData);
+                    } catch (error) {
+                        console.error("Invalid JSON string", error);
+                        return;
+                    }
+                }
+
+                const jsonContainer = jsonContent.querySelector("#json-container");
+                jsonContainer.innerHTML = ''; // Clear container
+
+                // Render JSON recursively
+                function renderJson(json, container, parentKey) {
+                    for (let key in json) {
+                        if (json.hasOwnProperty(key)) {
+                            const value = json[key];
+                            const item = document.createElement('div');
+
+                            if (typeof value === 'object' && value !== null) {
+                                const toggleBtn = document.createElement('span');
+                                toggleBtn.classList.add('json-viewer-toggle-btn');
+                                toggleBtn.textContent = `"${key}": `;
+
+                                const nestedContainer = document.createElement('div');
+                                nestedContainer.classList.add('json-viewer-nested');
+
+                                renderJson(value, nestedContainer, key);
+
+                                item.appendChild(toggleBtn);
+                                item.appendChild(document.createTextNode(Array.isArray(value) ? '[' : '{'));
+                                item.appendChild(nestedContainer);
+                                item.appendChild(document.createTextNode(Array.isArray(value) ? '],' : '},'));
+
+                                toggleBtn.addEventListener('click', function () {
+                                    item.classList.toggle('json-viewer-expanded');
+                                    item.classList.toggle('json-viewer-collapsed');
+                                });
+
+                                item.classList.add('json-viewer-expanded');
+                            } else {
+                                const keySpan = document.createElement('span');
+                                keySpan.classList.add('json-viewer-json-key');
+                                keySpan.textContent = `"${key}": `;
+
+                                const valueSpan = document.createElement('span');
+                                if (typeof itemProcessor === 'function') {
+                                    const result = itemProcessor(key, value, valueSpan, parentKey, json);
+                                    if (result === -1) continue;
+                                }
+
+                                if (typeof value === 'string') {
+                                    valueSpan.classList.add('json-viewer-json-string');
+                                    valueSpan.textContent = `"${value}"`;
+                                } else if (typeof value === 'number') {
+                                    valueSpan.classList.add('json-viewer-json-number');
+                                    valueSpan.textContent = value;
+                                } else if (typeof value === 'boolean') {
+                                    valueSpan.classList.add('json-viewer-json-boolean');
+                                    valueSpan.textContent = value;
+                                } else if (value === null) {
+                                    valueSpan.classList.add('json-viewer-json-null');
+                                    valueSpan.textContent = "null";
+                                }
+
+                                item.appendChild(keySpan);
+                                item.appendChild(valueSpan);
+                                item.appendChild(document.createTextNode(","));
+                            }
+
+                            container.appendChild(item);
+                        }
+                    }
+                }
+
+                renderJson(jsonData, jsonContainer);
+
+                // Add event listeners for controls
+                jsonContent.querySelector('#expand-all').addEventListener('click', () => {
+                    const items = jsonContent.querySelectorAll('.json-viewer-collapsed');
+                    items.forEach(item => {
+                        item.classList.add('json-viewer-expanded');
+                        item.classList.remove('json-viewer-collapsed');
+                    });
+                });
+
+                jsonContent.querySelector('#collapse-all').addEventListener('click', () => {
+                    const items = jsonContent.querySelectorAll('.json-viewer-expanded');
+                    items.forEach(item => {
+                        item.classList.add('json-viewer-collapsed');
+                        item.classList.remove('json-viewer-expanded');
+                    });
+                });
+
+                jsonContent.querySelector('#copy-json').addEventListener('click', () => {
+                    const tempTextArea = document.createElement('textarea');
+                    tempTextArea.value = JSON.stringify(jsonData, null, 2);
+                    document.body.appendChild(tempTextArea);
+                    tempTextArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(tempTextArea);
+
+                    const copyMessage = jsonContent.querySelector('#copy-message');
+                    copyMessage.classList.add('visible');
+                    setTimeout(() => copyMessage.classList.remove('visible'), 2000);
+                });
+            }
+
+            global.showJsonContent = showJsonContent;
+        })(window);
+    </script>
+</head>
+
+<body>
+    <div id="jsonContent"></div>
+    <script src="script.js"></script>
+</body>
+
+</html>

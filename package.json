@@ -1,0 +1,173 @@
+{
+  "name": "agl-essentials",
+  "displayName": "AGL Essentials",
+  "description": "A VS Code extension for AGL development, including Mapper Viewer and Endpoint Viewer.",
+  "version": "0.1.0",
+  "publisher": "henry-huang",
+  "engines": {
+    "vscode": "^1.98.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:.custom-middleware-name"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aglEssentials",
+          "title": "AGL Essentials",
+          "icon": "resources/agl-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "aglEssentials": [
+        {
+          "id": "aglMappers-page-composition",
+          "name": "Mappers page-composition",
+          "when": "aglMappers-page-composition-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglEndpoints-page-composition",
+          "name": "Endpoints page-composition",
+          "when": "aglMappers-page-composition-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglMappers-content",
+          "name": "Mappers content",
+          "when": "aglMappers-content-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglEndpoints-content",
+          "name": "Endpoints content",
+          "when": "aglEndpoints-content-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglMappers-recording",
+          "name": "Mappers recording",
+          "when": "aglMappers-recording-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglEndpoints-recording",
+          "name": "Endpoints recording",
+          "when": "aglEndpoints-recording-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglMappers-plus",
+          "name": "Mappers plus",
+          "when": "aglMappers-plus-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglEndpoints-plus",
+          "name": "Endpoints plus",
+          "when": "aglEndpoints-plus-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglMappers-stub",
+          "name": "Mappers stub",
+          "when": "aglMappers-stub-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglEndpoints-stub",
+          "name": "Endpoints stub",
+          "when": "aglEndpoints-stub-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglMappers-main",
+          "name": "Mappers main",
+          "when": "aglMappers-main-view-visible",
+          "icon": "resources/agl-icon.svg"
+        },
+        {
+          "id": "aglEndpoints-main",
+          "name": "Endpoints main",
+          "when": "aglEndpoints-main-view-visible",
+          "icon": "resources/agl-icon.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "aglEssentials.openMapperViewer",
+        "title": "Open Mapper Viewer"
+      },
+      {
+        "command": "aglEssentials.openEndpointViewer",
+        "title": "Open Endpoint Viewer"
+      },
+      {
+        "command": "aglEssentials.highlightNode",
+        "title": "Highlight Node"
+      },
+      {
+        "command": "aglEssentials.loadMiddleware",
+        "title": "Load AGL Middleware"
+      },
+      {
+        "command": "aglEssentials.goToUnitTestFile",
+        "title": "Go to Unit Test File"
+      }
+    ],
+    "colors": [
+      {
+        "id": "aglEssentials.treeHighlightBackground",
+        "description": "Background color for highlighted tree nodes in AGL Essentials.",
+        "defaults": {
+          "light": "#D6EAF8",
+          "dark": "#1F618D",
+          "highContrast": "#1B4F72"
+        }
+      },
+      {
+        "id": "aglEssentials.treeHighlightForeground",
+        "description": "Foreground color for highlighted tree nodes in AGL Essentials.",
+        "defaults": {
+          "light": "#000000",
+          "dark": "#FFFFFF",
+          "highContrast": "#FFFFFF"
+        }
+      }
+    ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "aglEssentials.highlightNode",
+          "when": "viewItem == highlightedNode",
+          "group": "inline"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "aglEssentials.goToUnitTestFile",
+          "when": "resourceExtname == .js",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^16.11.7",
+    "@types/vscode": "^1.98.0",
+    "typescript": "^4.9.4"
+  }
+}

@@ -1,0 +1,168 @@
+/* General body styling */
+body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f9f9f9;
+}
+
+/* Container for the JSON viewer */
+#jsonContent {
+    margin: 20px auto;
+    max-width: 90%;
+    background-color: white;
+    border-radius: 12px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+}
+
+/* Header styling */
+.json-viewer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: #f4f4f4;
+    padding: 10px 20px;
+    border-bottom: 1px solid #ddd;
+    font-weight: bold;
+    font-size: 18px;
+    color: #333;
+}
+
+/* Body styling */
+.json-viewer-body {
+    padding: 10px;
+    overflow-y: auto;
+    flex-grow: 1;
+}
+
+/* JSON container styling */
+.json-viewer-container {
+    background-color: #fafafa;
+    padding: 15px;
+    border-radius: 8px;
+    font-family: "Courier New", monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    border: 1px solid #ccc;
+    word-wrap: break-word;
+    box-shadow: inset 0px 2px 5px rgba(0, 0, 0, 0.05);
+    overflow-y: auto;
+    max-height: 75vh;
+}
+
+/* Expand/Collapse and Copy controls */
+.json-viewer-controls {
+    display: flex;
+    justify-content: flex-start;
+    margin-bottom: 10px;
+}
+
+.json-viewer-controls button {
+    font-size: 14px;
+    margin-right: 10px;
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 4px;
+    background-color: #f4f4f4;
+    border: 1px solid #ddd;
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.json-viewer-controls button:hover {
+    background-color: #e2e2e2;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+/* Copy message overlay */
+.json-viewer-copy-message {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 18px;
+    color: #fff;
+    background-color: rgba(0, 0, 0, 0.7);
+    padding: 8px 15px;
+    border-radius: 10px;
+    opacity: 0;
+    transition: opacity 0.5s ease-in-out;
+    pointer-events: none;
+}
+
+.json-viewer-show-copy-message {
+    opacity: 1;
+}
+
+/* JSON key styling */
+.json-viewer-json-key {
+    color: #d9534f;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.json-viewer-json-key::before {
+    content: "➰ ";
+    display: inline-block;
+    transition: transform 0.2s ease;
+}
+
+/* JSON value styling */
+.json-viewer-json-mapper {
+    color: #5cb85c;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.json-viewer-json-mapper:hover,
+.json-viewer-json-mapper.active {
+    font-weight: bold;
+    font-style: oblique;
+    color: blue;
+}
+
+.json-viewer-json-string {
+    color: #5cb85c;
+}
+
+.json-viewer-json-number {
+    color: #5bc0de;
+}
+
+.json-viewer-json-boolean {
+    color: #f0ad4e;
+}
+
+.json-viewer-json-null {
+    color: #d9534f;
+}
+
+/* Expand/Collapse toggle button */
+.json-viewer-toggle-btn::before {
+    content: "➖ ";
+    display: inline-block;
+    transition: transform 0.2s ease;
+}
+
+.json-viewer-collapsed > .json-viewer-toggle-btn::before {
+    content: "➕ ";
+}
+
+.json-viewer-expanded > .json-viewer-toggle-btn::before {
+    content: "➖ ";
+}
+
+/* Nested JSON styling */
+.json-viewer-nested {
+    display: block;
+    margin-left: 20px;
+    transition: all 0.3s ease-in-out;
+}
+
+.json-viewer-collapsed > .json-viewer-nested {
+    display: none;
+}
+
+.json-viewer-expanded > .json-viewer-nested {
+    display: block;
+}
