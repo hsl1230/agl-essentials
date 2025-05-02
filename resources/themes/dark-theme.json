@@ -1,0 +1,8 @@
+{
+  "name": "Dark Theme",
+  "type": "dark",
+  "colors": {
+    "list.highlightForeground": "#FFFFFF",
+    "list.highlightBackground": "#1F618D"
+  }
+}

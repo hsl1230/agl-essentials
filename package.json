@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "publisher": "henry-huang",
   "engines": {
-    "vscode": "^1.98.0"
+    "vscode": "^1.99.3"
   },
   "categories": [
     "Other"
@@ -122,6 +122,18 @@
         "title": "Go to Unit Test File"
       }
     ],
+    "themes": [
+      {
+        "label": "My Dark Theme",
+        "uiTheme": "vs-dark",
+        "path": ".resources/themes/dark-theme.json"
+      },
+      {
+        "label": "My Light Theme",
+        "uiTheme": "vs",
+        "path": ".resources/themes/light-theme.json"
+      }
+    ],
     "colors": [
       {
         "id": "aglEssentials.treeHighlightBackground",
@@ -136,9 +148,9 @@
         "id": "aglEssentials.treeHighlightForeground",
         "description": "Foreground color for highlighted tree nodes in AGL Essentials.",
         "defaults": {
-          "light": "#000000",
-          "dark": "#FFFFFF",
-          "highContrast": "#FFFFFF"
+          "light": "#FF0000",
+          "dark": "#FF0000",
+          "highContrast": "#FF0000"
         }
       }
     ],
@@ -167,7 +179,7 @@
   },
   "devDependencies": {
     "@types/node": "^16.11.7",
-    "@types/vscode": "^1.98.0",
+    "@types/vscode": "^1.99.0",
     "typescript": "^4.9.4"
   }
 }

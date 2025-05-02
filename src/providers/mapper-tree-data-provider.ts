@@ -123,7 +123,7 @@ export class MapperTreeDataProvider extends TreeDataProvider {
 
     private async expandParentNodes(treeView: vscode.TreeView<FeatureNode>, targetNode: FeatureNode): Promise<void> {
         try {
-            await treeView.reveal(targetNode, { expand: 3, select: true, focus: true });
+            await treeView.reveal(targetNode, { expand: 3, select: false, focus: false });
         } catch (error: any) {
             console.error(`Failed to expand parent nodes for ${targetNode.name}: ${error.message}`);
         }

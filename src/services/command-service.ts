@@ -81,7 +81,6 @@ export class CommandService {
 
 // Helper function to derive the unit test file path
 function deriveTestFilePath(filePath: string): string {
-    // Example: Replace "/src/" with "/test/" and append ".test.js"
     const dirName = path.dirname(filePath);
     const baseName = path.basename(filePath, '.js'); // Remove ".js" extension
     let testDir = '';

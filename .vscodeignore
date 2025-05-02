@@ -1,6 +1,10 @@
-.vscode/**
-node_modules/**
-src/**
+.vscode
+node_modules
+src
+README.md
+package-lock.json
+*.log
+*.tsbuildinfo
 .gitignore
 tsconfig.json
 *.ts
