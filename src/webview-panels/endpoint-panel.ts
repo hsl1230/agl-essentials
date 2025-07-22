@@ -2,7 +2,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { FeatureViewerManager } from '../services/feature-viewer-manager';
-import { ProviderManager } from '../services/provider-manager';
 import { AbstractPanel } from './abstract-panel';
 
 export class EndpointPanel extends AbstractPanel {
@@ -10,11 +9,10 @@ export class EndpointPanel extends AbstractPanel {
     workspaceFolder: string,
     middlewareName: string,
     isDefaultMiddleware: boolean,
-    providerManager: ProviderManager,
     context: vscode.ExtensionContext,
     private featureViewerManager: FeatureViewerManager
   ) {
-    super(workspaceFolder, middlewareName, isDefaultMiddleware, providerManager, context);
+    super(workspaceFolder, middlewareName, isDefaultMiddleware, context);
   }
 
   public get title(): string {

@@ -1,9 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { activateConfig } from './activate-config';
 import { activateDefaultMappersAndEndpoints } from './activate-default-mappers-endpoints';
 import { activateMiddleware } from './activate-middleware';
-import { activateTemplate } from './activate-template';
 import { HighlightDecorationProvider } from './providers/highlight-decoration-provider';
 import { CommandService } from './services/command-service';
 import { ProviderManager } from './services/provider-manager';
@@ -37,7 +37,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     activateDefaultMappersAndEndpoints(viewManager, providerManager, workspaceFolder, middlewareName);    
     activateMiddleware(workspaceFolder, middlewareName);
-    activateTemplate('template');
+    activateConfig('template');
+    activateConfig('nanoConfigKey');
+    activateConfig('panicConfigKey');
 
     // Register commands
     commandService.registerCommands(viewManager, providerManager);

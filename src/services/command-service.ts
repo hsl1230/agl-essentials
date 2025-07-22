@@ -36,6 +36,12 @@ export class CommandService {
             vscode.commands.registerCommand('aglEssentials.openMapperViewer', (mapperName, middlewareName) => {
                 this.featureViewerManager.openFeatureViewer('mapper-viewer', mapperName, middlewareName);
             }),
+            vscode.commands.registerCommand('aglEssentials.openMWareConfig', (configName, middlewareName) => {
+                this.featureViewerManager.openFeatureViewer('mware-config', configName, middlewareName);
+            }),
+            vscode.commands.registerCommand('aglEssentials.openCustomPanicConfig', (configName, middlewareName) => {
+                this.featureViewerManager.openFeatureViewer('custom-panic-config', configName, middlewareName);
+            }),
             vscode.commands.registerCommand('aglEssentials.openEndpointDetails', (endpoint, middlewareName) => {
                 this.featureViewerManager.openFeatureViewer('endpoint-viewer', endpoint, middlewareName);
             }),

@@ -34,7 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         const elJsonViewerTitle = document.querySelector('#jsonContent .json-viewer-title');
-        elJsonViewerTitle.title = 'Click to copy file path';
+        elJsonViewerTitle.title = 'Click to open the file and copy file path';
         elJsonViewerTitle.addEventListener('click', function () {
             vscode.postMessage({ command: 'openFile', filePath });
             const tempTextArea = document.createElement('textarea');

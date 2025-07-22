@@ -10,3 +10,4 @@ test/*.txt
 logs/
 out/
 package.json.original
+agl-essentials-0.1.0.vsix

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { AbstractPanel } from '../webview-panels/abstract-panel';
 import { EndpointPanel } from '../webview-panels/endpoint-panel';
+import { JsonConfigPanel } from '../webview-panels/json-config-panel';
 import { MapperPanel } from '../webview-panels/mapper-panel';
 import { ProviderManager } from './provider-manager';
 
@@ -20,7 +21,11 @@ export class FeatureViewerManager {
             case 'mapper-viewer':
                 return new MapperPanel(this.workspaceFolder, middlewareName, middlewareName === this.defaultMiddlewareName, this.providerManager, this.context);
             case 'endpoint-viewer':
-                return new EndpointPanel(this.workspaceFolder, middlewareName, middlewareName === this.defaultMiddlewareName, this.providerManager, this.context, this);
+                return new EndpointPanel(this.workspaceFolder, middlewareName, middlewareName === this.defaultMiddlewareName, this.context, this);
+            case 'mware-config':
+                return new JsonConfigPanel(this.workspaceFolder, middlewareName, middlewareName === this.defaultMiddlewareName, 'mWareConfig', this.context);
+            case 'custom-panic-config':
+                return new JsonConfigPanel(this.workspaceFolder, middlewareName, middlewareName === this.defaultMiddlewareName, 'customPanicConfig', this.context);
             default:
                 throw new Error(`Unknown feature name: ${featureName}`);
         }

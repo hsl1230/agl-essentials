@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { ProviderManager } from '../services/provider-manager';
 
 export abstract class AbstractPanel {
   protected panel: vscode.WebviewPanel | undefined;
@@ -10,7 +9,6 @@ export abstract class AbstractPanel {
     public readonly workspaceFolder: string,
     public readonly middlewareName: string,
     public readonly isDefaultMiddleware: boolean,
-    public readonly providerManager: ProviderManager,
     public readonly context: vscode.ExtensionContext
   ) {
   }
