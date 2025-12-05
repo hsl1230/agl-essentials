@@ -8,6 +8,7 @@ import { AbstractPanel } from './abstract-panel';
 export class FlowAnalyzerPanel extends AbstractPanel {
   private flowAnalyzer: FlowAnalyzer;
   private currentResult: FlowAnalysisResult | null = null;
+  private static outputChannel: vscode.OutputChannel;
 
   constructor(
     workspaceFolder: string,
@@ -15,7 +16,20 @@ export class FlowAnalyzerPanel extends AbstractPanel {
     context: vscode.ExtensionContext
   ) {
     super(workspaceFolder, middlewareName, context);
+    
+    // Create output channel for logging
+    if (!FlowAnalyzerPanel.outputChannel) {
+      FlowAnalyzerPanel.outputChannel = vscode.window.createOutputChannel('AGL Flow Analyzer');
+    }
+    this.log(`Constructor called with workspaceFolder: ${workspaceFolder}`);
+    
     this.flowAnalyzer = new FlowAnalyzer(workspaceFolder, middlewareName);
+  }
+
+  private log(message: string): void {
+    const timestamp = new Date().toISOString();
+    FlowAnalyzerPanel.outputChannel.appendLine(`[${timestamp}] ${message}`);
+    FlowAnalyzerPanel.outputChannel.show(true); // Show the output channel
   }
 
   public get title(): string {
@@ -27,21 +41,31 @@ export class FlowAnalyzerPanel extends AbstractPanel {
   }
 
   public initAction(featureArg: any): void {
-    const endpoint: EndpointConfig = featureArg;
-    this.analyzeAndDisplay(endpoint);
+    this.log('initAction called - waiting for webviewLoaded message');
+    // Don't call analyzeAndDisplay here - wait for webviewLoaded message from the webview
+    // The webview will send webviewLoaded once DOM is ready, then we can safely send data
   }
 
   private analyzeAndDisplay(endpoint: EndpointConfig): void {
+    this.log(`analyzeAndDisplay called for endpoint: ${endpoint.endpointUri}`);
+    this.log(`Middleware chain: ${JSON.stringify(endpoint.middleware)}`);
+    
     // Perform analysis
+    this.log('Starting flow analysis...');
     this.currentResult = this.flowAnalyzer.analyze(endpoint);
+    this.log('Flow analysis complete');
 
     // Generate Mermaid diagram
+    this.log('Generating Mermaid diagram...');
     const mermaidDiagram = this.flowAnalyzer.generateMermaidDiagram(this.currentResult);
     const dataFlowSummary = this.flowAnalyzer.generateDataFlowSummary(this.currentResult);
     const componentTree = this.flowAnalyzer.generateComponentTree(this.currentResult.middlewares);
+    this.log('Mermaid diagram generated');
 
     // Send to webview
-    this.panel?.webview.postMessage({
+    this.log('Sending results to webview...');
+    this.log(`Panel exists: ${!!this.panel}, webview exists: ${!!this.panel?.webview}`);
+    const result = this.panel?.webview.postMessage({
       command: 'analysisResult',
       content: {
         endpoint,
@@ -53,9 +77,14 @@ export class FlowAnalyzerPanel extends AbstractPanel {
         allProperties: Array.from(this.currentResult.allResLocalsProperties.entries()).map(([key, value]) => ({
           property: key,
           ...value
+        })),
+        allReqTransactionProperties: Array.from(this.currentResult.allReqTransactionProperties.entries()).map(([key, value]) => ({
+          property: key,
+          ...value
         }))
       }
     });
+    this.log(`postMessage result: ${result}`);
   }
 
   /**
@@ -68,6 +97,9 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       exists: mw.exists,
       resLocalsReads: mw.resLocalsReads,
       resLocalsWrites: mw.resLocalsWrites,
+      reqTransactionReads: mw.reqTransactionReads,
+      reqTransactionWrites: mw.reqTransactionWrites,
+      dataUsages: mw.dataUsages || [],
       externalCalls: mw.externalCalls,
       configDeps: mw.configDeps,
       internalDeps: mw.internalDeps,
@@ -76,6 +108,9 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       components: this.serializeComponents(mw.components),
       allResLocalsReads: mw.allResLocalsReads,
       allResLocalsWrites: mw.allResLocalsWrites,
+      allReqTransactionReads: mw.allReqTransactionReads,
+      allReqTransactionWrites: mw.allReqTransactionWrites,
+      allDataUsages: mw.allDataUsages || [],
       allExternalCalls: mw.allExternalCalls,
       allConfigDeps: mw.allConfigDeps
     }));
@@ -94,6 +129,9 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       parentPath: comp.parentPath,
       resLocalsReads: comp.resLocalsReads,
       resLocalsWrites: comp.resLocalsWrites,
+      reqTransactionReads: comp.reqTransactionReads,
+      reqTransactionWrites: comp.reqTransactionWrites,
+      dataUsages: comp.dataUsages || [],
       externalCalls: comp.externalCalls,
       configDeps: comp.configDeps,
       exportedFunctions: comp.exportedFunctions,
@@ -104,8 +142,10 @@ export class FlowAnalyzerPanel extends AbstractPanel {
 
   protected getMessageHandler(featureArg: any): (msg: any) => void {
     return async (message: any) => {
+      this.log(`Received message: ${message.command}`);
       switch (message.command) {
         case 'webviewLoaded':
+          this.log('webviewLoaded received, starting analysis...');
           this.analyzeAndDisplay(featureArg);
           break;
 
@@ -137,6 +177,10 @@ export class FlowAnalyzerPanel extends AbstractPanel {
 
         case 'trackProperty':
           this.trackProperty(message.property);
+          break;
+
+        case 'trackReqTransaction':
+          this.trackReqTransaction(message.property);
           break;
 
         case 'openConfigFile':
@@ -172,7 +216,12 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       }
 
       const doc = await vscode.workspace.openTextDocument(filePath);
-      const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+      // Use ViewColumn.Beside to open next to webview, preserving webview focus
+      const editor = await vscode.window.showTextDocument(doc, {
+        viewColumn: vscode.ViewColumn.One,
+        preserveFocus: false, // Focus the editor but don't close webview
+        preview: true
+      });
 
       if (lineNumber && lineNumber > 0) {
         const position = new vscode.Position(lineNumber - 1, 0);
@@ -279,6 +328,65 @@ export class FlowAnalyzerPanel extends AbstractPanel {
 
     this.panel?.webview.postMessage({
       command: 'propertyUsages',
+      content: {
+        property,
+        producers: info.producers,
+        consumers: info.consumers,
+        usages
+      }
+    });
+  }
+
+  private trackReqTransaction(property: string): void {
+    if (!this.currentResult) return;
+
+    const info = this.currentResult.allReqTransactionProperties.get(property);
+    if (!info) return;
+
+    // Find all usages across middlewares and their components
+    const usages: any[] = [];
+    
+    const collectUsages = (source: any, sourceName: string, isComponent: boolean) => {
+      const writes = source.reqTransactionWrites?.filter((w: any) => w.property === property) || [];
+      const reads = source.reqTransactionReads?.filter((r: any) => r.property === property) || [];
+
+      writes.forEach((w: any) => {
+        usages.push({
+          source: sourceName,
+          filePath: source.filePath,
+          isComponent,
+          type: 'write',
+          lineNumber: w.lineNumber,
+          codeSnippet: w.codeSnippet
+        });
+      });
+
+      reads.forEach((r: any) => {
+        usages.push({
+          source: sourceName,
+          filePath: source.filePath,
+          isComponent,
+          type: 'read',
+          lineNumber: r.lineNumber,
+          codeSnippet: r.codeSnippet
+        });
+      });
+    };
+
+    const collectFromComponents = (components: any[], parentName: string) => {
+      for (const comp of components) {
+        collectUsages(comp, `${parentName} → ${comp.displayName}`, true);
+        collectFromComponents(comp.children, `${parentName} → ${comp.displayName}`);
+      }
+    };
+
+    this.currentResult.middlewares.forEach(mw => {
+      collectUsages(mw, mw.name, false);
+      collectFromComponents(mw.components, mw.name);
+    });
+
+    this.panel?.webview.postMessage({
+      command: 'reqTransactionUsages',
       content: {
         property,
         producers: info.producers,

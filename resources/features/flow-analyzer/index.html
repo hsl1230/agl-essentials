@@ -38,7 +38,13 @@
                     <button id="reset-zoom-btn">↺ Reset</button>
                 </div>
                 <div class="diagram-container" id="mermaid-diagram">
-                    <div class="loading">Analyzing middleware flow...</div>
+                    <div class="diagram-viewport">
+                        <div class="loading">
+                            <div class="loading-spinner"></div>
+                            <div class="loading-text">Analyzing middleware flow...</div>
+                        </div>
+                    </div>
+                    <div class="zoom-info">100%</div>
                 </div>
                 <div class="diagram-legend">
                     <span class="legend-item"><span class="legend-color writes"></span> Writes res.locals</span>
@@ -72,7 +78,15 @@
                     <input type="text" id="property-search" placeholder="Search properties...">
                 </div>
                 <div class="property-list" id="property-list"></div>
-                <div class="property-detail" id="property-detail"></div>
+            </div>
+
+            <!-- Floating Property Detail Panel -->
+            <div class="property-detail-floating" id="property-detail-floating">
+                <div class="floating-panel-header">
+                    <span class="floating-panel-title" id="floating-panel-title">Property Details</span>
+                    <button class="floating-panel-close" id="floating-panel-close">✕</button>
+                </div>
+                <div class="floating-panel-content" id="floating-panel-content"></div>
             </div>
 
             <!-- Config View Tab -->
@@ -84,6 +98,7 @@
         <!-- Detail Sidebar -->
         <div class="detail-sidebar" id="detail-sidebar">
             <div class="sidebar-header">
+                <button class="back-btn" id="back-btn" title="Back" style="display: none;">←</button>
                 <h3 id="sidebar-title">Detail</h3>
                 <button class="close-btn" id="close-sidebar">✕</button>
             </div>

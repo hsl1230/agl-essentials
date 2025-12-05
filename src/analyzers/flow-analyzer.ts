@@ -1,10 +1,10 @@
 import {
-    ComponentAnalysis,
-    ComponentDataFlowEdge,
-    DataFlowEdge,
-    EndpointConfig,
-    FlowAnalysisResult,
-    MiddlewareAnalysis
+  ComponentAnalysis,
+  ComponentDataFlowEdge,
+  DataFlowEdge,
+  EndpointConfig,
+  FlowAnalysisResult,
+  MiddlewareAnalysis
 } from '../models/flow-analyzer-types';
 import { MiddlewareAnalyzer } from './middleware-analyzer';
 
@@ -27,13 +27,14 @@ export class FlowAnalyzer {
   public analyze(endpoint: EndpointConfig): FlowAnalysisResult {
     const middlewares: MiddlewareAnalysis[] = [];
     const allResLocalsProperties = new Map<string, { producers: string[]; consumers: string[] }>();
+    const allReqTransactionProperties = new Map<string, { producers: string[]; consumers: string[] }>();
 
     // Analyze each middleware in the chain
     for (const middlewarePath of endpoint.middleware) {
       const analysis = this.middlewareAnalyzer.analyzeMiddleware(middlewarePath);
       middlewares.push(analysis);
 
-      // Track producers (writers) - now using aggregated data from all components
+      // Track res.locals producers (writers) - now using aggregated data from all components
       for (const write of analysis.allResLocalsWrites) {
         if (!allResLocalsProperties.has(write.property)) {
           allResLocalsProperties.set(write.property, { producers: [], consumers: [] });
@@ -45,13 +46,37 @@ export class FlowAnalyzer {
         }
       }
 
-      // Track consumers (readers) - now using aggregated data from all components
+      // Track res.locals consumers (readers) - now using aggregated data from all components
       for (const read of analysis.allResLocalsReads) {
         if (!allResLocalsProperties.has(read.property)) {
           allResLocalsProperties.set(read.property, { producers: [], consumers: [] });
         }
         const sourceInfo = read.sourcePath ? `${middlewarePath}::${this.getShortPath(read.sourcePath)}` : middlewarePath;
         const entry = allResLocalsProperties.get(read.property)!;
+        if (!entry.consumers.includes(sourceInfo)) {
+          entry.consumers.push(sourceInfo);
+        }
+      }
+
+      // Track req.transaction producers (writers)
+      for (const write of analysis.allReqTransactionWrites) {
+        if (!allReqTransactionProperties.has(write.property)) {
+          allReqTransactionProperties.set(write.property, { producers: [], consumers: [] });
+        }
+        const sourceInfo = write.sourcePath ? `${middlewarePath}::${this.getShortPath(write.sourcePath)}` : middlewarePath;
+        const entry = allReqTransactionProperties.get(write.property)!;
+        if (!entry.producers.includes(sourceInfo)) {
+          entry.producers.push(sourceInfo);
+        }
+      }
+
+      // Track req.transaction consumers (readers)
+      for (const read of analysis.allReqTransactionReads) {
+        if (!allReqTransactionProperties.has(read.property)) {
+          allReqTransactionProperties.set(read.property, { producers: [], consumers: [] });
+        }
+        const sourceInfo = read.sourcePath ? `${middlewarePath}::${this.getShortPath(read.sourcePath)}` : middlewarePath;
+        const entry = allReqTransactionProperties.get(read.property)!;
         if (!entry.consumers.includes(sourceInfo)) {
           entry.consumers.push(sourceInfo);
         }
@@ -67,6 +92,7 @@ export class FlowAnalyzer {
       middlewares,
       dataFlow,
       allResLocalsProperties,
+      allReqTransactionProperties,
       componentDataFlow
     };
   }
@@ -122,27 +148,39 @@ export class FlowAnalyzer {
   private buildComponentDataFlowEdges(middlewares: MiddlewareAnalysis[]): ComponentDataFlowEdge[] {
     const edges: ComponentDataFlowEdge[] = [];
     
-    // Collect all writes and reads with their source paths
-    const allWrites: { property: string; source: string; middlewareIndex: number }[] = [];
-    const allReads: { property: string; source: string; middlewareIndex: number }[] = [];
+    // Use Maps to group writes and reads by property for O(1) lookup
+    const writesByProperty = new Map<string, { source: string; middlewareIndex: number }[]>();
+    const readsByProperty = new Map<string, { source: string; middlewareIndex: number }[]>();
 
     middlewares.forEach((mw, mwIndex) => {
       // Middleware's own writes/reads
       mw.resLocalsWrites.forEach(w => {
-        allWrites.push({ property: w.property, source: mw.filePath, middlewareIndex: mwIndex });
+        if (!writesByProperty.has(w.property)) {
+          writesByProperty.set(w.property, []);
+        }
+        writesByProperty.get(w.property)!.push({ source: mw.filePath, middlewareIndex: mwIndex });
       });
       mw.resLocalsReads.forEach(r => {
-        allReads.push({ property: r.property, source: mw.filePath, middlewareIndex: mwIndex });
+        if (!readsByProperty.has(r.property)) {
+          readsByProperty.set(r.property, []);
+        }
+        readsByProperty.get(r.property)!.push({ source: mw.filePath, middlewareIndex: mwIndex });
       });
 
       // Component writes/reads (recursively)
       const collectFromComponents = (components: ComponentAnalysis[]) => {
         for (const comp of components) {
           comp.resLocalsWrites.forEach(w => {
-            allWrites.push({ property: w.property, source: comp.filePath, middlewareIndex: mwIndex });
+            if (!writesByProperty.has(w.property)) {
+              writesByProperty.set(w.property, []);
+            }
+            writesByProperty.get(w.property)!.push({ source: comp.filePath, middlewareIndex: mwIndex });
           });
           comp.resLocalsReads.forEach(r => {
-            allReads.push({ property: r.property, source: comp.filePath, middlewareIndex: mwIndex });
+            if (!readsByProperty.has(r.property)) {
+              readsByProperty.set(r.property, []);
+            }
+            readsByProperty.get(r.property)!.push({ source: comp.filePath, middlewareIndex: mwIndex });
           });
           collectFromComponents(comp.children);
         }
@@ -150,18 +188,29 @@ export class FlowAnalyzer {
       collectFromComponents(mw.components);
     });
 
-    // Find write -> read relationships
-    for (const write of allWrites) {
-      for (const read of allReads) {
-        if (write.property === read.property && write.middlewareIndex <= read.middlewareIndex) {
-          // Only track if write happens before or in same middleware as read
-          if (write.source !== read.source) {
-            edges.push({
-              from: this.getShortPath(write.source),
-              to: this.getShortPath(read.source),
-              property: write.property,
-              type: 'write-read'
-            });
+    // Find write -> read relationships by property (optimized O(n) per property)
+    const seenEdges = new Set<string>();
+    
+    for (const [property, writes] of writesByProperty.entries()) {
+      const reads = readsByProperty.get(property);
+      if (!reads) continue;
+
+      for (const write of writes) {
+        for (const read of reads) {
+          if (write.middlewareIndex <= read.middlewareIndex && write.source !== read.source) {
+            const fromPath = this.getShortPath(write.source);
+            const toPath = this.getShortPath(read.source);
+            const edgeKey = `${fromPath}:${toPath}:${property}`;
+            
+            if (!seenEdges.has(edgeKey)) {
+              seenEdges.add(edgeKey);
+              edges.push({
+                from: fromPath,
+                to: toPath,
+                property,
+                type: 'write-read'
+              });
+            }
           }
         }
       }
@@ -201,24 +250,24 @@ export class FlowAnalyzer {
 
       // Create a subgraph for middleware with components
       if (mw.components.length > 0) {
-        diagram += `    subgraph ${id}["${index + 1}. ${shortName}"]\n`;
-        diagram += `        ${id}_main["${shortName}"]${nodeClass}\n`;
+        diagram += `    subgraph MW${index + 1}["${index + 1}. ${shortName}"]\n`;
+        diagram += `        MW${index + 1}_main["${shortName}"]${nodeClass}\n`;
         
         // Add component nodes
-        this.addComponentNodes(diagram, mw.components, id, 0);
+        this.addComponentNodes(diagram, mw.components, `MW${index + 1}`, 0);
         
         diagram += `    end\n`;
       } else {
-        diagram += `    ${id}["${index + 1}. ${shortName}"]${nodeClass}\n`;
+        diagram += `    MW${index + 1}["${index + 1}. ${shortName}"]${nodeClass}\n`;
       }
 
       // Add external call nodes if present
       if (hasExternal) {
         mw.allExternalCalls.forEach((call, callIdx) => {
-          const callId = `${id}_ext${callIdx}`;
+          const callId = `MW${index + 1}_ext${callIdx}`;
           const label = call.template || call.type;
           diagram += `    ${callId}(("${label}")):::external\n`;
-          diagram += `    ${id} -.-> ${callId}\n`;
+          diagram += `    MW${index + 1} -.-> ${callId}\n`;
         });
       }
     });
@@ -231,13 +280,30 @@ export class FlowAnalyzer {
       const toIndex = result.middlewares.findIndex(m => m.name === edge.to);
 
       if (fromIndex !== -1 && toIndex !== -1) {
-        const fromId = `M${fromIndex}`;
-        const toId = `M${toIndex}`;
+        const fromId = `MW${fromIndex + 1}`;
+        const toId = `MW${toIndex + 1}`;
 
         if (edge.properties.length > 0) {
-          const propsLabel = edge.properties.slice(0, 3).join('\\n');
-          const suffix = edge.properties.length > 3 ? `\\n+${edge.properties.length - 3} more` : '';
-          diagram += `    ${fromId} -->|"${propsLabel}${suffix}"| ${toId}\n`;
+          // Show max 12 properties (or 11 + "more"), 3 per line, separated by comma
+          const maxDisplay = 12;
+          const props = edge.properties;
+          const hasMore = props.length > maxDisplay;
+          const displayProps = hasMore ? props.slice(0, 11) : props;
+          
+          const lines: string[] = [];
+          for (let i = 0; i < displayProps.length; i += 3) {
+            const lineProps = displayProps.slice(i, i + 3);
+            lines.push(lineProps.join(', '));
+          }
+          
+          // If there are more than 12, add "+N more" to the last line
+          if (hasMore) {
+            const remaining = props.length - 11;
+            lines[lines.length - 1] += `, +${remaining} more`;
+          }
+          
+          const propsLabel = lines.join('\\n');
+          diagram += `    ${fromId} -->|"${propsLabel}"| ${toId}\n`;
         } else {
           diagram += `    ${fromId} --> ${toId}\n`;
         }

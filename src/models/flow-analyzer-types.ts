@@ -13,6 +13,33 @@ export interface EndpointConfig {
   panicConfigKey?: string;
 }
 
+/**
+ * Data usage types - tracks various input/output data sources
+ */
+export type DataSourceType = 
+  | 'res.locals'
+  | 'req.transaction'
+  | 'req.query'
+  | 'req.body'
+  | 'req.params'
+  | 'req.headers'
+  | 'req.cookies'
+  | 'res.cookie'
+  | 'res.header'
+  | 'return'
+  | 'function-param';
+
+export interface DataUsage {
+  sourceType: DataSourceType;
+  property: string;
+  type: 'read' | 'write';
+  lineNumber: number;
+  codeSnippet: string;
+  fullPath?: string;  // e.g., "seedData.containers" for nested properties
+  sourcePath?: string; // Source file path where this usage occurs
+}
+
+// Keep ResLocalsUsage for backward compatibility
 export interface ResLocalsUsage {
   property: string;
   type: 'read' | 'write';
@@ -29,6 +56,7 @@ export interface ExternalCall {
   method?: string;
   lineNumber: number;
   codeSnippet?: string;
+  sourcePath?: string; // Source file path where this call occurs
 }
 
 export interface ConfigDependency {
@@ -59,9 +87,17 @@ export interface ComponentAnalysis {
   depth: number;           // Depth in the call tree (0 = direct import from middleware)
   parentPath?: string;     // Path of the parent component
   
-  // Code analysis results
+  // Code analysis results - res.locals (primary)
   resLocalsReads: ResLocalsUsage[];
   resLocalsWrites: ResLocalsUsage[];
+  
+  // Code analysis results - req.transaction (similar to res.locals)
+  reqTransactionReads: ResLocalsUsage[];
+  reqTransactionWrites: ResLocalsUsage[];
+  
+  // Extended data usage tracking
+  dataUsages: DataUsage[];
+  
   externalCalls: ExternalCall[];
   configDeps: ConfigDependency[];
   
@@ -72,6 +108,9 @@ export interface ComponentAnalysis {
   // Function locations
   exportedFunctions: string[];
   mainFunctionLine?: number;
+  
+  // Indicates this is a shallow reference (already analyzed elsewhere)
+  isShallowReference?: boolean;
 }
 
 export interface MiddlewareAnalysis {
@@ -80,18 +119,29 @@ export interface MiddlewareAnalysis {
   exists: boolean;
   resLocalsReads: ResLocalsUsage[];
   resLocalsWrites: ResLocalsUsage[];
+  
+  // req.transaction tracking (similar to res.locals)
+  reqTransactionReads: ResLocalsUsage[];
+  reqTransactionWrites: ResLocalsUsage[];
+  
+  // Extended data usage tracking
+  dataUsages: DataUsage[];
+  
   externalCalls: ExternalCall[];
   configDeps: ConfigDependency[];
   internalDeps: string[];
   runFunctionLine?: number;
   panicFunctionLine?: number;
   
-  // NEW: Component tree
+  // Component tree
   components: ComponentAnalysis[];
   
-  // NEW: Aggregated data from all components
+  // Aggregated data from all components
   allResLocalsReads: ResLocalsUsage[];
   allResLocalsWrites: ResLocalsUsage[];
+  allReqTransactionReads: ResLocalsUsage[];
+  allReqTransactionWrites: ResLocalsUsage[];
+  allDataUsages: DataUsage[];
   allExternalCalls: ExternalCall[];
   allConfigDeps: ConfigDependency[];
 }
@@ -114,6 +164,10 @@ export interface FlowAnalysisResult {
   middlewares: MiddlewareAnalysis[];
   dataFlow: DataFlowEdge[];
   allResLocalsProperties: Map<string, {
+    producers: string[];
+    consumers: string[];
+  }>;
+  allReqTransactionProperties: Map<string, {
     producers: string[];
     consumers: string[];
   }>;

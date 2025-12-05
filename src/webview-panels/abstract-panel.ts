@@ -49,22 +49,14 @@ export abstract class AbstractPanel {
     const cssPath = vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'features', this.featureName, 'style.css'));
     const jsPath = vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'features', this.featureName, 'script.js'));
 
-
     let html = fs.readFileSync(htmlPath, 'utf8');
 
     html = html
       .replace('{{styleUri}}', panel.webview.asWebviewUri(cssPath).toString())
       .replace('{{scriptUri}}', panel.webview.asWebviewUri(jsPath).toString());
 
-    // Read and update the HTML content
-    fs.readFile(htmlPath, 'utf8', (err, data) => {
-      if (err) {
-        vscode.window.showErrorMessage('Failed to load webview content');
-        return;
-      }
-
-      panel.webview.html = html;
-    });
+    // Set the HTML content synchronously
+    panel.webview.html = html;
 
     this.panel = panel;
     return panel;

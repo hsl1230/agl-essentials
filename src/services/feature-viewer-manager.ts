@@ -52,6 +52,9 @@ export class FeatureViewerManager {
         this.featurePanelMap.set(`${featureName}-${middlewareName}`, thePanel);
         
         thePanel.registerOnDidReceiveMessage(featureArg);
+        
+        // Call initAction for new panels as well
+        thePanel.initAction(featureArg);
     }
 
     dispose() {
