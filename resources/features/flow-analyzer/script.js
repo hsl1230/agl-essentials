@@ -313,6 +313,15 @@ window.addEventListener('message', event => {
                 console.error('[FlowAnalyzer WebView] Error handling analysisResult:', error);
             }
             break;
+        case 'diagramUpdate':
+            // Handle diagram-only update (for expand/collapse)
+            console.log('[FlowAnalyzer WebView] Handling diagramUpdate...');
+            try {
+                renderMermaidDiagram(message.content.mermaidDiagram);
+            } catch (error) {
+                console.error('[FlowAnalyzer WebView] Error handling diagramUpdate:', error);
+            }
+            break;
         case 'middlewareDetail':
             showMiddlewareDetailSidebar(message.content);
             break;
@@ -415,8 +424,29 @@ async function renderMermaidDiagram(diagram) {
                     return; // Don't process as middleware node
                 }
                 
+                // Check if it's a component node with children (expandable): MW{n}_c{...}
+                // These nodes have ▶ or ▼ indicator in their label
+                const compMatch = nodeId.match(/^(MW\d+_c[\d_c]+)$/);
+                if (compMatch) {
+                    const compNodeId = compMatch[1];
+                    const nodeLabel = node.querySelector('.nodeLabel')?.textContent || '';
+                    const isExpandable = nodeLabel.includes('▶') || nodeLabel.includes('▼');
+                    
+                    if (isExpandable) {
+                        node.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            // Toggle component expansion
+                            vscode.postMessage({
+                                command: 'toggleComponentExpansion',
+                                nodeId: compNodeId
+                            });
+                        });
+                        return;
+                    }
+                }
+                
                 // Check if it's a middleware node: MW{n} or MW{n}_main
-                const mwMatch = nodeId.match(/MW(\d+)(?:_main)?(?!_ext)/);
+                const mwMatch = nodeId.match(/MW(\d+)(?:_main)?(?!_ext|_c)/);
                 if (mwMatch) {
                     const mwIndex = parseInt(mwMatch[1]) - 1;
                     if (currentMiddlewares[mwIndex]) {

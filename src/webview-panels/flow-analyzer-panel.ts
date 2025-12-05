@@ -8,6 +8,9 @@ import { AbstractPanel } from './abstract-panel';
 export class FlowAnalyzerPanel extends AbstractPanel {
   private flowAnalyzer: FlowAnalyzer;
   private currentResult: FlowAnalysisResult | null = null;
+  private currentEndpoint: EndpointConfig | null = null;  // Store current endpoint
+  private webviewReady: boolean = false;  // Track if webview has loaded
+  private expandedNodes: Set<string> = new Set();  // Track expanded component nodes
   private static outputChannel: vscode.OutputChannel;
 
   constructor(
@@ -41,9 +44,18 @@ export class FlowAnalyzerPanel extends AbstractPanel {
   }
 
   public initAction(featureArg: any): void {
-    this.log('initAction called - waiting for webviewLoaded message');
-    // Don't call analyzeAndDisplay here - wait for webviewLoaded message from the webview
-    // The webview will send webviewLoaded once DOM is ready, then we can safely send data
+    this.log('initAction called');
+    const endpoint: EndpointConfig = featureArg;
+    this.currentEndpoint = endpoint;
+    this.expandedNodes.clear();  // Reset expansion state for new endpoint
+    
+    // If webview is already ready, start analysis immediately
+    if (this.webviewReady) {
+      this.log('Webview already ready, starting analysis...');
+      this.analyzeAndDisplay(endpoint);
+    } else {
+      this.log('Waiting for webviewLoaded message...');
+    }
   }
 
   private analyzeAndDisplay(endpoint: EndpointConfig): void {
@@ -55,9 +67,9 @@ export class FlowAnalyzerPanel extends AbstractPanel {
     this.currentResult = this.flowAnalyzer.analyze(endpoint);
     this.log('Flow analysis complete');
 
-    // Generate Mermaid diagram
+    // Generate Mermaid diagram with current expansion state
     this.log('Generating Mermaid diagram...');
-    const mermaidDiagram = this.flowAnalyzer.generateMermaidDiagram(this.currentResult);
+    const mermaidDiagram = this.flowAnalyzer.generateMermaidDiagram(this.currentResult, this.expandedNodes);
     const dataFlowSummary = this.flowAnalyzer.generateDataFlowSummary(this.currentResult);
     const componentTree = this.flowAnalyzer.generateComponentTree(this.currentResult.middlewares);
     this.log('Mermaid diagram generated');
@@ -74,6 +86,7 @@ export class FlowAnalyzerPanel extends AbstractPanel {
         dataFlowSummary,
         componentTree,
         componentDataFlow: this.currentResult.componentDataFlow,
+        expandedNodes: Array.from(this.expandedNodes),  // Send expansion state to webview
         allProperties: Array.from(this.currentResult.allResLocalsProperties.entries()).map(([key, value]) => ({
           property: key,
           ...value
@@ -85,6 +98,23 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       }
     });
     this.log(`postMessage result: ${result}`);
+  }
+
+  /**
+   * Regenerate only the Mermaid diagram with current expansion state
+   */
+  private regenerateDiagram(): void {
+    if (!this.currentResult) return;
+    
+    const mermaidDiagram = this.flowAnalyzer.generateMermaidDiagram(this.currentResult, this.expandedNodes);
+    
+    this.panel?.webview.postMessage({
+      command: 'diagramUpdate',
+      content: {
+        mermaidDiagram,
+        expandedNodes: Array.from(this.expandedNodes)
+      }
+    });
   }
 
   /**
@@ -145,8 +175,14 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       this.log(`Received message: ${message.command}`);
       switch (message.command) {
         case 'webviewLoaded':
-          this.log('webviewLoaded received, starting analysis...');
-          this.analyzeAndDisplay(featureArg);
+          this.log('webviewLoaded received');
+          this.webviewReady = true;
+          // Use currentEndpoint if available, otherwise fall back to featureArg
+          const endpoint = this.currentEndpoint || featureArg;
+          if (endpoint) {
+            this.log('Starting analysis...');
+            this.analyzeAndDisplay(endpoint);
+          }
           break;
 
         case 'openMiddlewareFile':
@@ -162,9 +198,21 @@ export class FlowAnalyzerPanel extends AbstractPanel {
           break;
 
         case 'refreshAnalysis':
-          if (this.currentResult) {
-            this.analyzeAndDisplay(this.currentResult.endpoint);
+          if (this.currentEndpoint) {
+            this.expandedNodes.clear();  // Reset expansion state on refresh
+            this.analyzeAndDisplay(this.currentEndpoint);
           }
+          break;
+
+        case 'toggleComponentExpansion':
+          // Toggle expansion state for a component node
+          const nodeId = message.nodeId;
+          if (this.expandedNodes.has(nodeId)) {
+            this.expandedNodes.delete(nodeId);
+          } else {
+            this.expandedNodes.add(nodeId);
+          }
+          this.regenerateDiagram();
           break;
 
         case 'showMiddlewareDetail':

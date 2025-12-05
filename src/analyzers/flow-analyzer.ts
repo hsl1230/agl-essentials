@@ -1,10 +1,10 @@
 import {
-  ComponentAnalysis,
-  ComponentDataFlowEdge,
-  DataFlowEdge,
-  EndpointConfig,
-  FlowAnalysisResult,
-  MiddlewareAnalysis
+    ComponentAnalysis,
+    ComponentDataFlowEdge,
+    DataFlowEdge,
+    EndpointConfig,
+    FlowAnalysisResult,
+    MiddlewareAnalysis
 } from '../models/flow-analyzer-types';
 import { MiddlewareAnalyzer } from './middleware-analyzer';
 
@@ -220,20 +220,22 @@ export class FlowAnalyzer {
   }
 
   /**
-   * Generate Mermaid diagram from analysis result - now with component details
+   * Generate Mermaid diagram from analysis result
+   * @param result - The flow analysis result
+   * @param expandedNodes - Set of node IDs that should show their children (e.g., "MW1_c0", "MW2_c1")
    */
-  public generateMermaidDiagram(result: FlowAnalysisResult): string {
+  public generateMermaidDiagram(result: FlowAnalysisResult, expandedNodes: Set<string> = new Set()): string {
     let diagram = 'flowchart TD\n';
     diagram += '    classDef default fill:#2d2d2d,stroke:#555,color:#fff\n';
     diagram += '    classDef hasWrites fill:#1a472a,stroke:#2d5a3d,color:#90EE90\n';
     diagram += '    classDef hasReads fill:#1a365d,stroke:#2a4a7f,color:#87CEEB\n';
     diagram += '    classDef hasBoth fill:#4a3728,stroke:#6b4423,color:#DEB887\n';
     diagram += '    classDef component fill:#3d3d3d,stroke:#666,color:#ccc\n';
-    diagram += '    classDef external fill:#4a1a2e,stroke:#6b2340,color:#FFB6C1\n\n';
+    diagram += '    classDef expandable fill:#3d3d3d,stroke:#888,color:#fff,stroke-width:2px\n';
+    diagram += '    classDef external fill:#4a1a2e,stroke:#6b2340,color:#FFB6C1,font-size:12px\n\n';
 
-    // Add middleware nodes
+    // Add middleware nodes with external calls arranged on left/right sides
     result.middlewares.forEach((mw, index) => {
-      const id = `M${index}`;
       const shortName = mw.name.split('/').pop() || mw.name;
       const hasWrites = mw.allResLocalsWrites.length > 0;
       const hasReads = mw.allResLocalsReads.length > 0;
@@ -253,22 +255,47 @@ export class FlowAnalyzer {
         diagram += `    subgraph MW${index + 1}["${index + 1}. ${shortName}"]\n`;
         diagram += `        MW${index + 1}_main["${shortName}"]${nodeClass}\n`;
         
-        // Add component nodes
-        this.addComponentNodes(diagram, mw.components, `MW${index + 1}`, 0);
+        // Add component nodes with expansion support
+        diagram = this.addComponentNodesWithExpansion(diagram, mw.components, `MW${index + 1}`, `MW${index + 1}_main`, expandedNodes);
         
         diagram += `    end\n`;
       } else {
         diagram += `    MW${index + 1}["${index + 1}. ${shortName}"]${nodeClass}\n`;
       }
 
-      // Add external call nodes if present
+      // Add external call nodes - use rounded rectangles and arrange on left/right sides
       if (hasExternal) {
-        mw.allExternalCalls.forEach((call, callIdx) => {
-          const callId = `MW${index + 1}_ext${callIdx}`;
-          const label = call.template || call.type;
-          diagram += `    ${callId}(("${label}")):::external\n`;
-          diagram += `    MW${index + 1} -.-> ${callId}\n`;
-        });
+        const calls = mw.allExternalCalls;
+        const leftCalls = calls.filter((_, i) => i % 2 === 0);  // Even indices on left
+        const rightCalls = calls.filter((_, i) => i % 2 === 1); // Odd indices on right
+        
+        // Create left side external calls (stacked vertically)
+        if (leftCalls.length > 0) {
+          diagram += `    subgraph MW${index + 1}_extL[" "]\n`;
+          diagram += `    direction TB\n`;
+          leftCalls.forEach((call, i) => {
+            const callIdx = i * 2;
+            const callId = `MW${index + 1}_ext${callIdx}`;
+            const label = call.template || call.type;
+            diagram += `        ${callId}("${label}"):::external\n`;
+          });
+          diagram += `    end\n`;
+          diagram += `    MW${index + 1} -.-> MW${index + 1}_extL\n`;
+        }
+        
+        // Create right side external calls (stacked vertically)
+        if (rightCalls.length > 0) {
+          diagram += `    subgraph MW${index + 1}_extR[" "]\n`;
+          diagram += `    direction TB\n`;
+          rightCalls.forEach((call, i) => {
+            const callIdx = i * 2 + 1;
+            const callId = `MW${index + 1}_ext${callIdx}`;
+            const label = call.template || call.type;
+            diagram += `        ${callId}("${label}"):::external\n`;
+          });
+          diagram += `    end\n`;
+          diagram += `    MW${index + 1} -.-> MW${index + 1}_extR\n`;
+        }
       }
     });
 
@@ -314,14 +341,25 @@ export class FlowAnalyzer {
   }
 
   /**
-   * Add component nodes recursively to the diagram
+   * Add component nodes with expansion support
+   * Shows components and allows expanding those with children
    */
-  private addComponentNodes(diagram: string, components: ComponentAnalysis[], parentId: string, depth: number): string {
+  private addComponentNodesWithExpansion(
+    diagram: string, 
+    components: ComponentAnalysis[], 
+    mwId: string,
+    parentNodeId: string,
+    expandedNodes: Set<string>,
+    prefix: string = ''
+  ): string {
     components.forEach((comp, idx) => {
-      const compId = `${parentId}_c${depth}_${idx}`;
+      const compId = prefix ? `${prefix}_c${idx}` : `${mwId}_c${idx}`;
       const hasWrites = comp.resLocalsWrites.length > 0;
       const hasReads = comp.resLocalsReads.length > 0;
+      const hasChildren = comp.children.length > 0;
+      const isExpanded = expandedNodes.has(compId);
       
+      // Determine node class based on data operations
       let nodeClass = ':::component';
       if (hasWrites && hasReads) {
         nodeClass = ':::hasBoth';
@@ -330,17 +368,51 @@ export class FlowAnalyzer {
       } else if (hasReads) {
         nodeClass = ':::hasReads';
       }
+      
+      // If has children but not expanded, use expandable class
+      if (hasChildren && !isExpanded) {
+        nodeClass = ':::expandable';
+      }
 
-      diagram += `        ${compId}["${comp.displayName}"]${nodeClass}\n`;
-      diagram += `        ${parentId}_main --> ${compId}\n`;
+      // Build label with expansion indicator
+      let label = comp.displayName;
+      if (hasChildren) {
+        const childCount = this.countAllChildren(comp);
+        if (isExpanded) {
+          label = `▼ ${label}`;  // Expanded indicator
+        } else {
+          label = `▶ ${label} (${childCount})`;  // Collapsed with count
+        }
+      }
 
-      // Add children recursively
-      if (comp.children.length > 0) {
-        this.addComponentNodes(diagram, comp.children, compId, depth + 1);
+      diagram += `        ${compId}["${label}"]${nodeClass}\n`;
+      diagram += `        ${parentNodeId} --> ${compId}\n`;
+      
+      // If expanded, show children
+      if (hasChildren && isExpanded) {
+        diagram = this.addComponentNodesWithExpansion(
+          diagram, 
+          comp.children, 
+          mwId,
+          compId,
+          expandedNodes,
+          compId
+        );
       }
     });
 
     return diagram;
+  }
+
+  /**
+   * Count all nested children recursively
+   */
+  private countAllChildren(comp: ComponentAnalysis): number {
+    let count = comp.children.length;
+    for (const child of comp.children) {
+      count += this.countAllChildren(child);
+    }
+    return count;
   }
 
   /**
