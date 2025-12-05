@@ -68,10 +68,10 @@ function initializeMermaid() {
             useMaxWidth: false,
             htmlLabels: true,
             curve: 'basis',
-            nodeSpacing: 80,
-            rankSpacing: 100,
-            padding: 20,
-            diagramPadding: 20
+            nodeSpacing: 50,
+            rankSpacing: 60,
+            padding: 15,
+            diagramPadding: 15
         },
         securityLevel: 'loose'
     });
@@ -314,10 +314,10 @@ window.addEventListener('message', event => {
             }
             break;
         case 'diagramUpdate':
-            // Handle diagram-only update (for expand/collapse)
+            // Handle diagram-only update (for expand/collapse) - preserve pan/zoom
             console.log('[FlowAnalyzer WebView] Handling diagramUpdate...');
             try {
-                renderMermaidDiagram(message.content.mermaidDiagram);
+                renderMermaidDiagram(message.content.mermaidDiagram, true);
             } catch (error) {
                 console.error('[FlowAnalyzer WebView] Error handling diagramUpdate:', error);
             }
@@ -383,18 +383,31 @@ function renderEndpointInfo(endpoint) {
 }
 
 // Render Mermaid diagram - FIX click handlers
-async function renderMermaidDiagram(diagram) {
+// preservePosition: if true, keep current pan/zoom (for expand/collapse)
+async function renderMermaidDiagram(diagram, preservePosition = false) {
     const container = document.getElementById('mermaid-diagram');
     const viewport = container.querySelector('.diagram-viewport');
+    
+    // Save current position before re-render
+    const savedZoom = zoomLevel;
+    const savedTranslateX = panState.currentTranslateX;
+    const savedTranslateY = panState.currentTranslateY;
     
     try {
         const { svg } = await mermaid.render('flowchart', diagram);
         viewport.innerHTML = `<div class="mermaid">${svg}</div>`;
         
-        // Reset pan/zoom on new diagram
-        zoomLevel = 1;
-        panState.currentTranslateX = 0;
-        panState.currentTranslateY = 0;
+        if (preservePosition) {
+            // Restore saved position for expand/collapse
+            zoomLevel = savedZoom;
+            panState.currentTranslateX = savedTranslateX;
+            panState.currentTranslateY = savedTranslateY;
+        } else {
+            // Reset pan/zoom on new diagram
+            zoomLevel = 1;
+            panState.currentTranslateX = 0;
+            panState.currentTranslateY = 0;
+        }
         applyZoom();
         
         // Add click handlers to nodes - use a more robust selector
@@ -439,35 +452,38 @@ async function renderMermaidDiagram(diagram) {
                     return; // Don't process as middleware node
                 }
                 
+                // Check if it's a toggle button node: MW{n}_c{...}_toggle
+                const toggleMatch = nodeId.match(/^(MW\d+(?:_c\d+)+)_toggle$/);
+                if (toggleMatch) {
+                    const compNodeId = toggleMatch[1];
+                    console.log('[FlowAnalyzer] Toggle button node:', nodeId, '-> component:', compNodeId);
+                    
+                    node.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        console.log('[FlowAnalyzer] Toggle clicked for:', compNodeId);
+                        vscode.postMessage({
+                            command: 'toggleComponentExpansion',
+                            nodeId: compNodeId
+                        });
+                    });
+                    return;
+                }
+                
                 // Check if it's a component node: MW{n}_c{...} (e.g., MW1_c0, MW1_c0_c1)
                 const compMatch = nodeId.match(/^(MW\d+(?:_c\d+)+)$/);
                 if (compMatch) {
                     console.log('[FlowAnalyzer] Component node:', nodeId);
                     const compNodeId = compMatch[1];
-                    const nodeLabel = node.querySelector('.nodeLabel')?.textContent || '';
-                    const isExpandable = nodeLabel.includes('▶') || nodeLabel.includes('▼');
-                    console.log('[FlowAnalyzer] Component expandable:', isExpandable, 'label:', nodeLabel);
                     
+                    // Component nodes always show detail in sidebar (toggle is separate)
                     node.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        console.log('[FlowAnalyzer] Component clicked:', compNodeId);
-                        
-                        if (isExpandable) {
-                            // Toggle component expansion
-                            console.log('[FlowAnalyzer] Toggling expansion for:', compNodeId);
-                            vscode.postMessage({
-                                command: 'toggleComponentExpansion',
-                                nodeId: compNodeId
-                            });
-                        } else {
-                            // Show component detail in sidebar
-                            const comp = findComponentByNodeId(compNodeId);
-                            console.log('[FlowAnalyzer] Found component:', comp);
-                            if (comp) {
-                                sidebarHistory = [];
-                                currentSidebarItem = null;
-                                showComponentDetailSidebar(comp, false);
-                            }
+                        console.log('[FlowAnalyzer] Component clicked, showing detail:', compNodeId);
+                        const comp = findComponentByNodeId(compNodeId);
+                        if (comp) {
+                            sidebarHistory = [];
+                            currentSidebarItem = null;
+                            showComponentDetailSidebar(comp, false);
                         }
                     });
                     return;
@@ -484,7 +500,6 @@ async function renderMermaidDiagram(diagram) {
                             console.log('[FlowAnalyzer] Middleware clicked:', nodeId);
                             // Reset history when clicking from flow diagram
                             sidebarHistory = [];
-                            currentSidebarItem = null;
                             showMiddlewareDetailSidebar(currentMiddlewares[mwIndex], false);
                         });
                     }

@@ -232,7 +232,8 @@ export class FlowAnalyzer {
     diagram += '    classDef hasBoth fill:#4a3728,stroke:#6b4423,color:#DEB887\n';
     diagram += '    classDef component fill:#3d3d3d,stroke:#666,color:#ccc\n';
     diagram += '    classDef expandable fill:#3d3d3d,stroke:#888,color:#fff,stroke-width:2px\n';
-    diagram += '    classDef external fill:#4a1a2e,stroke:#6b2340,color:#FFB6C1,font-size:12px\n\n';
+    diagram += '    classDef external fill:#4a1a2e,stroke:#6b2340,color:#FFB6C1,font-size:12px\n';
+    diagram += '    classDef toggle fill:#555,stroke:#777,color:#fff,font-size:11px\n\n';
 
     // Add middleware nodes with external calls arranged on left/right sides
     result.middlewares.forEach((mw, index) => {
@@ -350,7 +351,8 @@ export class FlowAnalyzer {
     mwId: string,
     parentNodeId: string,
     expandedNodes: Set<string>,
-    prefix: string = ''
+    prefix: string = '',
+    depth: number = 0
   ): string {
     components.forEach((comp, idx) => {
       const compId = prefix ? `${prefix}_c${idx}` : `${mwId}_c${idx}`;
@@ -368,36 +370,39 @@ export class FlowAnalyzer {
       } else if (hasReads) {
         nodeClass = ':::hasReads';
       }
-      
-      // If has children but not expanded, use expandable class
-      if (hasChildren && !isExpanded) {
-        nodeClass = ':::expandable';
-      }
 
-      // Build label with expansion indicator
-      let label = comp.displayName;
+      const indent = '        ' + '    '.repeat(depth);
+      const label = comp.displayName;
+      
+      // If has children, create separate toggle button node
       if (hasChildren) {
         const childCount = this.countAllChildren(comp);
+        const toggleId = `${compId}_toggle`;
+        const toggleSymbol = isExpanded ? '▼' : '▶';
+        const toggleLabel = isExpanded ? toggleSymbol : `${toggleSymbol} (${childCount})`;
+        
+        // Create toggle button as a small circle node
+        diagram += `${indent}${toggleId}(("${toggleLabel}")):::toggle\n`;
+        diagram += `${indent}${compId}["${label}"]${nodeClass}\n`;
+        diagram += `${indent}${parentNodeId} --> ${toggleId}\n`;
+        diagram += `${indent}${toggleId} --- ${compId}\n`;
+        
+        // If expanded, show children connected to the component
         if (isExpanded) {
-          label = `▼ ${label}`;  // Expanded indicator
-        } else {
-          label = `▶ ${label} (${childCount})`;  // Collapsed with count
+          diagram = this.addComponentNodesWithExpansion(
+            diagram, 
+            comp.children, 
+            mwId,
+            compId,
+            expandedNodes,
+            compId,
+            depth
+          );
         }
-      }
-
-      diagram += `        ${compId}["${label}"]${nodeClass}\n`;
-      diagram += `        ${parentNodeId} --> ${compId}\n`;
-      
-      // If expanded, show children
-      if (hasChildren && isExpanded) {
-        diagram = this.addComponentNodesWithExpansion(
-          diagram, 
-          comp.children, 
-          mwId,
-          compId,
-          expandedNodes,
-          compId
-        );
+      } else {
+        // No children, just show the component node
+        diagram += `${indent}${compId}["${label}"]${nodeClass}\n`;
+        diagram += `${indent}${parentNodeId} --> ${compId}\n`;
       }
     });
 
