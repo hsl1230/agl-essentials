@@ -4,6 +4,7 @@ const vscode = acquireVsCodeApi();
 let currentEndpoint = null;
 let currentMiddlewares = [];
 let currentProperties = [];
+let currentComponentTree = [];
 let zoomLevel = 1;
 
 // Initialize
@@ -82,6 +83,26 @@ function initializeControls() {
     document.getElementById('property-search')?.addEventListener('input', (e) => {
         filterProperties(e.target.value);
     });
+
+    document.getElementById('expand-all-btn')?.addEventListener('click', () => {
+        document.querySelectorAll('.tree-node-children, .tree-child-children').forEach(el => {
+            el.classList.add('expanded');
+        });
+        document.querySelectorAll('.tree-toggle').forEach(el => {
+            if (!el.classList.contains('empty')) {
+                el.classList.add('expanded');
+            }
+        });
+    });
+
+    document.getElementById('collapse-all-btn')?.addEventListener('click', () => {
+        document.querySelectorAll('.tree-node-children, .tree-child-children').forEach(el => {
+            el.classList.remove('expanded');
+        });
+        document.querySelectorAll('.tree-toggle').forEach(el => {
+            el.classList.remove('expanded');
+        });
+    });
 }
 
 function applyZoom() {
@@ -110,6 +131,9 @@ window.addEventListener('message', event => {
         case 'middlewareDetail':
             showMiddlewareDetailSidebar(message.content);
             break;
+        case 'componentDetail':
+            showComponentDetailSidebar(message.content);
+            break;
         case 'propertyUsages':
             showPropertyUsages(message.content);
             break;
@@ -124,10 +148,12 @@ function handleAnalysisResult(data) {
     currentEndpoint = data.endpoint;
     currentMiddlewares = data.middlewares;
     currentProperties = data.allProperties;
+    currentComponentTree = data.componentTree || [];
     
     renderEndpointInfo(data.endpoint);
     renderMermaidDiagram(data.mermaidDiagram);
     renderMiddlewareChain(data.middlewares);
+    renderComponentTree(data.middlewares);
     renderDataFlow(data.allProperties);
     renderConfigView(data.endpoint, data.middlewares);
 }
@@ -169,7 +195,7 @@ async function renderMermaidDiagram(diagram) {
     }
 }
 
-// Render middleware chain
+// Render middleware chain with component info
 function renderMiddlewareChain(middlewares) {
     const container = document.getElementById('middleware-chain');
     container.innerHTML = '';
@@ -178,15 +204,22 @@ function renderMiddlewareChain(middlewares) {
         // Middleware item
         const item = document.createElement('div');
         item.className = 'middleware-item';
+        
+        const totalReads = mw.allResLocalsReads?.length || mw.resLocalsReads.length;
+        const totalWrites = mw.allResLocalsWrites?.length || mw.resLocalsWrites.length;
+        const totalExternal = mw.allExternalCalls?.length || mw.externalCalls.length;
+        const componentCount = mw.components?.length || 0;
+        
         item.innerHTML = `
             <div class="middleware-index">${index + 1}</div>
             <div class="middleware-content">
                 <div class="middleware-name">${mw.name}</div>
                 <div class="middleware-status">
                     ${mw.exists ? '' : '<span class="status-item missing">⚠️ File not found</span>'}
-                    <span class="status-item reads">📥 ${mw.resLocalsReads.length} reads</span>
-                    <span class="status-item writes">📤 ${mw.resLocalsWrites.length} writes</span>
-                    ${mw.externalCalls.length > 0 ? `<span class="status-item calls">🌐 ${mw.externalCalls.length} calls</span>` : ''}
+                    <span class="status-item reads">📥 ${totalReads} reads</span>
+                    <span class="status-item writes">📤 ${totalWrites} writes</span>
+                    ${totalExternal > 0 ? `<span class="status-item calls">🌐 ${totalExternal} calls</span>` : ''}
+                    ${componentCount > 0 ? `<span class="status-item" style="color: var(--accent-purple)">📦 ${componentCount} components</span>` : ''}
                 </div>
             </div>
         `;
@@ -207,6 +240,217 @@ function renderMiddlewareChain(middlewares) {
             arrow.textContent = '↓';
             container.appendChild(arrow);
         }
+    });
+}
+
+// Render component tree
+function renderComponentTree(middlewares) {
+    const container = document.getElementById('component-tree-container');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    middlewares.forEach((mw, mwIndex) => {
+        const node = createTreeNode(mw, mwIndex, true);
+        container.appendChild(node);
+    });
+}
+
+// Create a tree node (middleware or component)
+function createTreeNode(item, index, isMiddleware) {
+    const node = document.createElement('div');
+    node.className = 'tree-node';
+    
+    const hasChildren = item.components?.length > 0 || item.children?.length > 0;
+    const children = item.components || item.children || [];
+    
+    const reads = item.resLocalsReads || [];
+    const writes = item.resLocalsWrites || [];
+    const external = item.externalCalls || [];
+    const configDeps = item.configDeps || [];
+    
+    const allReads = item.allResLocalsReads || reads;
+    const allWrites = item.allResLocalsWrites || writes;
+    const allExternal = item.allExternalCalls || external;
+    
+    const iconClass = isMiddleware ? 'middleware' : (item.name?.startsWith('@opus/') ? 'agl-module' : 'component');
+    const icon = isMiddleware ? '📦' : (item.name?.startsWith('@opus/') ? '🔧' : '📄');
+    
+    node.innerHTML = `
+        <div class="tree-node-header">
+            <span class="tree-toggle ${hasChildren ? '' : 'empty'}">▶</span>
+            <span class="tree-node-icon ${iconClass}">${icon}</span>
+            <span class="tree-node-name">${isMiddleware ? `${index + 1}. ${item.name}` : item.displayName || item.name}</span>
+            <div class="tree-node-badges">
+                ${allReads.length > 0 ? `<span class="tree-badge reads">R:${allReads.length}</span>` : ''}
+                ${allWrites.length > 0 ? `<span class="tree-badge writes">W:${allWrites.length}</span>` : ''}
+                ${allExternal.length > 0 ? `<span class="tree-badge external">E:${allExternal.length}</span>` : ''}
+                ${configDeps.length > 0 ? `<span class="tree-badge config">C:${configDeps.length}</span>` : ''}
+            </div>
+        </div>
+        <div class="tree-node-children">
+            <!-- Middleware/Component's own res.locals -->
+            ${(reads.length > 0 || writes.length > 0) ? `
+                <div class="tree-res-locals">
+                    <div class="tree-res-locals-title">res.locals (this file)</div>
+                    ${writes.map(w => `
+                        <div class="tree-res-locals-item" data-path="${item.filePath}" data-line="${w.lineNumber}">
+                            <span class="type-indicator write">W</span>
+                            <span class="property">${w.property}</span>
+                            <span class="line">:${w.lineNumber}</span>
+                        </div>
+                    `).join('')}
+                    ${reads.map(r => `
+                        <div class="tree-res-locals-item" data-path="${item.filePath}" data-line="${r.lineNumber}">
+                            <span class="type-indicator read">R</span>
+                            <span class="property">${r.property}</span>
+                            <span class="line">:${r.lineNumber}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : ''}
+            
+            <!-- External calls -->
+            ${external.length > 0 ? `
+                <div class="tree-external-calls">
+                    <div class="tree-res-locals-title">External Calls</div>
+                    ${external.map(e => `
+                        <div class="tree-external-call-item" data-path="${item.filePath}" data-line="${e.lineNumber}">
+                            <span class="call-type">${e.type}</span>
+                            <span class="call-template">${e.template || e.method || ''}</span>
+                            <span class="line">:${e.lineNumber}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : ''}
+            
+            <!-- Child components -->
+            ${children.map((child, idx) => createChildNode(child, idx)).join('')}
+        </div>
+    `;
+    
+    // Add toggle functionality
+    const toggle = node.querySelector('.tree-toggle');
+    const childrenContainer = node.querySelector('.tree-node-children');
+    
+    toggle?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggle.classList.toggle('expanded');
+        childrenContainer.classList.toggle('expanded');
+    });
+    
+    // Add click handler for header to open file
+    const header = node.querySelector('.tree-node-header');
+    header.addEventListener('click', () => {
+        if (isMiddleware) {
+            vscode.postMessage({
+                command: 'openMiddlewareFile',
+                middlewarePath: item.name,
+                lineNumber: item.runFunctionLine || 1
+            });
+        } else {
+            vscode.postMessage({
+                command: 'openComponentFile',
+                filePath: item.filePath,
+                lineNumber: item.mainFunctionLine || 1
+            });
+        }
+    });
+    
+    // Add click handlers for res.locals items
+    node.querySelectorAll('.tree-res-locals-item, .tree-external-call-item').forEach(el => {
+        el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            vscode.postMessage({
+                command: 'openComponentFile',
+                filePath: el.dataset.path,
+                lineNumber: parseInt(el.dataset.line) || 1
+            });
+        });
+    });
+    
+    return node;
+}
+
+// Create child node HTML (for recursive components)
+function createChildNode(comp, index) {
+    const hasChildren = comp.children?.length > 0;
+    const reads = comp.resLocalsReads || [];
+    const writes = comp.resLocalsWrites || [];
+    const external = comp.externalCalls || [];
+    
+    const iconClass = comp.name?.startsWith('@opus/') ? 'agl-module' : 'component';
+    const icon = comp.name?.startsWith('@opus/') ? '🔧' : '📄';
+    
+    return `
+        <div class="tree-child-node">
+            <div class="tree-child-header" data-path="${comp.filePath}" data-line="${comp.mainFunctionLine || 1}">
+                <span class="tree-toggle ${hasChildren ? '' : 'empty'}">▶</span>
+                <span class="tree-node-icon ${iconClass}">${icon}</span>
+                <span class="tree-node-name">${comp.displayName || comp.name}</span>
+                <div class="tree-node-badges">
+                    ${reads.length > 0 ? `<span class="tree-badge reads">R:${reads.length}</span>` : ''}
+                    ${writes.length > 0 ? `<span class="tree-badge writes">W:${writes.length}</span>` : ''}
+                    ${external.length > 0 ? `<span class="tree-badge external">E:${external.length}</span>` : ''}
+                </div>
+            </div>
+            <div class="tree-child-children">
+                ${(reads.length > 0 || writes.length > 0) ? `
+                    <div class="tree-res-locals">
+                        ${writes.map(w => `
+                            <div class="tree-res-locals-item" data-path="${comp.filePath}" data-line="${w.lineNumber}">
+                                <span class="type-indicator write">W</span>
+                                <span class="property">${w.property}</span>
+                                <span class="line">:${w.lineNumber}</span>
+                            </div>
+                        `).join('')}
+                        ${reads.map(r => `
+                            <div class="tree-res-locals-item" data-path="${comp.filePath}" data-line="${r.lineNumber}">
+                                <span class="type-indicator read">R</span>
+                                <span class="property">${r.property}</span>
+                                <span class="line">:${r.lineNumber}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : ''}
+                ${comp.children?.map((child, idx) => createChildNode(child, idx)).join('') || ''}
+            </div>
+        </div>
+    `;
+}
+
+// Setup tree event handlers (called after rendering)
+function setupTreeEventHandlers() {
+    // Toggle handlers for child nodes
+    document.querySelectorAll('.tree-child-header').forEach(header => {
+        const toggle = header.querySelector('.tree-toggle');
+        const parent = header.parentElement;
+        const children = parent.querySelector('.tree-child-children');
+        
+        toggle?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggle.classList.toggle('expanded');
+            children?.classList.toggle('expanded');
+        });
+        
+        header.addEventListener('click', () => {
+            vscode.postMessage({
+                command: 'openComponentFile',
+                filePath: header.dataset.path,
+                lineNumber: parseInt(header.dataset.line) || 1
+            });
+        });
+    });
+    
+    // Res.locals item click handlers
+    document.querySelectorAll('.tree-res-locals-item, .tree-external-call-item').forEach(el => {
+        el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            vscode.postMessage({
+                command: 'openComponentFile',
+                filePath: el.dataset.path,
+                lineNumber: parseInt(el.dataset.line) || 1
+            });
+        });
     });
 }
 
@@ -256,11 +500,20 @@ function showPropertyUsages(data) {
     
     container.innerHTML = `
         <h4>res.locals.${data.property}</h4>
+        <div class="usage-summary" style="margin-bottom: 12px; font-size: 12px; color: var(--text-secondary);">
+            <span style="color: var(--accent-green);">📤 ${data.producers.length} producer(s)</span>
+            <span style="margin: 0 8px;">→</span>
+            <span style="color: var(--accent-blue);">📥 ${data.consumers.length} consumer(s)</span>
+        </div>
         <div class="usage-list">
             ${data.usages.map(usage => `
-                <div class="usage-item" data-middleware="${usage.middleware}" data-line="${usage.lineNumber}">
+                <div class="usage-item" 
+                     data-filepath="${usage.filePath || ''}" 
+                     data-middleware="${usage.source || usage.middleware}" 
+                     data-line="${usage.lineNumber}"
+                     data-iscomponent="${usage.isComponent || false}">
                     <span class="usage-type ${usage.type}">${usage.type.toUpperCase()}</span>
-                    <span class="usage-middleware">${usage.middleware}</span>
+                    <span class="usage-middleware">${usage.source || usage.middleware}</span>
                     <span class="usage-line">:${usage.lineNumber}</span>
                 </div>
             `).join('')}
@@ -270,11 +523,22 @@ function showPropertyUsages(data) {
     // Add click handlers
     container.querySelectorAll('.usage-item').forEach(item => {
         item.addEventListener('click', () => {
-            vscode.postMessage({
-                command: 'openMiddlewareAtLine',
-                middlewarePath: item.dataset.middleware,
-                lineNumber: parseInt(item.dataset.line)
-            });
+            const filePath = item.dataset.filepath;
+            const isComponent = item.dataset.iscomponent === 'true';
+            
+            if (isComponent && filePath) {
+                vscode.postMessage({
+                    command: 'openComponentFile',
+                    filePath: filePath,
+                    lineNumber: parseInt(item.dataset.line)
+                });
+            } else {
+                vscode.postMessage({
+                    command: 'openMiddlewareAtLine',
+                    middlewarePath: item.dataset.middleware,
+                    lineNumber: parseInt(item.dataset.line)
+                });
+            }
         });
     });
 }
@@ -378,6 +642,12 @@ function showMiddlewareDetailSidebar(middleware) {
     
     title.textContent = middleware.name;
     
+    const allReads = middleware.allResLocalsReads || middleware.resLocalsReads;
+    const allWrites = middleware.allResLocalsWrites || middleware.resLocalsWrites;
+    const allExternal = middleware.allExternalCalls || middleware.externalCalls;
+    const allConfigDeps = middleware.allConfigDeps || middleware.configDeps;
+    const components = middleware.components || [];
+    
     content.innerHTML = `
         <!-- File Info -->
         <div class="detail-section">
@@ -392,9 +662,19 @@ function showMiddlewareDetailSidebar(middleware) {
             ` : ''}
         </div>
         
-        <!-- res.locals Writes -->
+        <!-- Components -->
+        ${components.length > 0 ? `
         <div class="detail-section">
-            <div class="detail-section-title">📤 Writes to res.locals (${middleware.resLocalsWrites.length})</div>
+            <div class="detail-section-title">📦 Components (${countAllComponents(components)})</div>
+            <div class="detail-list">
+                ${renderComponentList(components)}
+            </div>
+        </div>
+        ` : ''}
+        
+        <!-- res.locals Writes (this file) -->
+        <div class="detail-section">
+            <div class="detail-section-title">📤 Writes in this file (${middleware.resLocalsWrites.length})</div>
             <div class="detail-list">
                 ${middleware.resLocalsWrites.map(w => `
                     <div class="detail-item" data-path="${middleware.name}" data-line="${w.lineNumber}">
@@ -405,9 +685,9 @@ function showMiddlewareDetailSidebar(middleware) {
             </div>
         </div>
         
-        <!-- res.locals Reads -->
+        <!-- res.locals Reads (this file) -->
         <div class="detail-section">
-            <div class="detail-section-title">📥 Reads from res.locals (${middleware.resLocalsReads.length})</div>
+            <div class="detail-section-title">📥 Reads in this file (${middleware.resLocalsReads.length})</div>
             <div class="detail-list">
                 ${middleware.resLocalsReads.map(r => `
                     <div class="detail-item" data-path="${middleware.name}" data-line="${r.lineNumber}">
@@ -417,6 +697,19 @@ function showMiddlewareDetailSidebar(middleware) {
                 `).join('') || '<div style="color: var(--text-muted); font-size: 12px;">None</div>'}
             </div>
         </div>
+        
+        <!-- Total from all components -->
+        ${allWrites.length > middleware.resLocalsWrites.length || allReads.length > middleware.resLocalsReads.length ? `
+        <div class="detail-section">
+            <div class="detail-section-title">📊 Total (including components)</div>
+            <div style="font-size: 12px; color: var(--text-secondary);">
+                <div>📤 ${allWrites.length} total writes</div>
+                <div>📥 ${allReads.length} total reads</div>
+                <div>🌐 ${allExternal.length} external calls</div>
+                <div>⚙️ ${allConfigDeps.length} config dependencies</div>
+            </div>
+        </div>
+        ` : ''}
         
         <!-- External Calls -->
         <div class="detail-section">
@@ -452,6 +745,156 @@ function showMiddlewareDetailSidebar(middleware) {
             vscode.postMessage({
                 command: 'openMiddlewareAtLine',
                 middlewarePath: item.dataset.path,
+                lineNumber: parseInt(item.dataset.line) || 1
+            });
+        });
+    });
+    
+    // Add click handlers for component items
+    content.querySelectorAll('.component-item').forEach(item => {
+        item.addEventListener('click', () => {
+            vscode.postMessage({
+                command: 'openComponentFile',
+                filePath: item.dataset.filepath,
+                lineNumber: parseInt(item.dataset.line) || 1
+            });
+        });
+    });
+    
+    sidebar.classList.add('open');
+}
+
+// Count all components recursively
+function countAllComponents(components) {
+    let count = components.length;
+    for (const comp of components) {
+        if (comp.children) {
+            count += countAllComponents(comp.children);
+        }
+    }
+    return count;
+}
+
+// Render component list for sidebar
+function renderComponentList(components, depth = 0) {
+    return components.map(comp => {
+        const indent = '  '.repeat(depth);
+        const childCount = comp.children?.length || 0;
+        const hasData = comp.resLocalsReads?.length > 0 || comp.resLocalsWrites?.length > 0;
+        
+        let html = `
+            <div class="component-item" data-filepath="${comp.filePath}" data-line="${comp.mainFunctionLine || 1}" style="padding-left: ${depth * 16}px;">
+                <span style="color: ${hasData ? 'var(--accent-green)' : 'var(--text-secondary)'}">
+                    ${comp.name?.startsWith('@opus/') ? '🔧' : '📄'} ${comp.displayName || comp.name}
+                </span>
+                ${comp.resLocalsWrites?.length > 0 ? `<span style="color: var(--accent-green); font-size: 10px;">W:${comp.resLocalsWrites.length}</span>` : ''}
+                ${comp.resLocalsReads?.length > 0 ? `<span style="color: var(--accent-blue); font-size: 10px;">R:${comp.resLocalsReads.length}</span>` : ''}
+                ${childCount > 0 ? `<span style="color: var(--text-muted); font-size: 10px;">(${childCount})</span>` : ''}
+            </div>
+        `;
+        
+        if (comp.children?.length > 0) {
+            html += renderComponentList(comp.children, depth + 1);
+        }
+        
+        return html;
+    }).join('');
+}
+
+// Show component detail in sidebar
+function showComponentDetailSidebar(component) {
+    const sidebar = document.getElementById('detail-sidebar');
+    const content = document.getElementById('sidebar-content');
+    const title = document.getElementById('sidebar-title');
+    
+    title.textContent = component.displayName || component.name;
+    
+    content.innerHTML = `
+        <!-- File Info -->
+        <div class="detail-section">
+            <div class="detail-section-title">📁 File</div>
+            <div class="detail-item component-file" data-filepath="${component.filePath}" data-line="${component.mainFunctionLine || 1}">
+                <code>${component.filePath.split(/[/\\]/).slice(-3).join('/')}</code>
+            </div>
+        </div>
+        
+        <!-- Exported Functions -->
+        ${component.exportedFunctions?.length > 0 ? `
+        <div class="detail-section">
+            <div class="detail-section-title">📤 Exports</div>
+            <div style="font-size: 12px; color: var(--accent-yellow);">
+                ${component.exportedFunctions.join(', ')}
+            </div>
+        </div>
+        ` : ''}
+        
+        <!-- res.locals Writes -->
+        <div class="detail-section">
+            <div class="detail-section-title">📤 Writes (${component.resLocalsWrites?.length || 0})</div>
+            <div class="detail-list">
+                ${(component.resLocalsWrites || []).map(w => `
+                    <div class="detail-item component-line" data-filepath="${component.filePath}" data-line="${w.lineNumber}">
+                        <code>${w.property}</code>
+                        <span style="color: var(--text-muted)">:${w.lineNumber}</span>
+                    </div>
+                `).join('') || '<div style="color: var(--text-muted); font-size: 12px;">None</div>'}
+            </div>
+        </div>
+        
+        <!-- res.locals Reads -->
+        <div class="detail-section">
+            <div class="detail-section-title">📥 Reads (${component.resLocalsReads?.length || 0})</div>
+            <div class="detail-list">
+                ${(component.resLocalsReads || []).map(r => `
+                    <div class="detail-item component-line" data-filepath="${component.filePath}" data-line="${r.lineNumber}">
+                        <code>${r.property}</code>
+                        <span style="color: var(--text-muted)">:${r.lineNumber}</span>
+                    </div>
+                `).join('') || '<div style="color: var(--text-muted); font-size: 12px;">None</div>'}
+            </div>
+        </div>
+        
+        <!-- External Calls -->
+        <div class="detail-section">
+            <div class="detail-section-title">🌐 External Calls (${component.externalCalls?.length || 0})</div>
+            <div class="detail-list">
+                ${(component.externalCalls || []).map(c => `
+                    <div class="detail-item component-line" data-filepath="${component.filePath}" data-line="${c.lineNumber}">
+                        <span style="color: var(--accent-orange)">${c.type.toUpperCase()}</span>
+                        ${c.template ? `<code>${c.template}</code>` : ''}
+                        <span style="color: var(--text-muted)">:${c.lineNumber}</span>
+                    </div>
+                `).join('') || '<div style="color: var(--text-muted); font-size: 12px;">None</div>'}
+            </div>
+        </div>
+        
+        <!-- Children -->
+        ${component.children?.length > 0 ? `
+        <div class="detail-section">
+            <div class="detail-section-title">📦 Sub-components (${component.children.length})</div>
+            <div class="detail-list">
+                ${renderComponentList(component.children)}
+            </div>
+        </div>
+        ` : ''}
+    `;
+    
+    // Add click handlers
+    content.querySelectorAll('.component-file, .component-line').forEach(item => {
+        item.addEventListener('click', () => {
+            vscode.postMessage({
+                command: 'openComponentFile',
+                filePath: item.dataset.filepath,
+                lineNumber: parseInt(item.dataset.line) || 1
+            });
+        });
+    });
+    
+    content.querySelectorAll('.component-item').forEach(item => {
+        item.addEventListener('click', () => {
+            vscode.postMessage({
+                command: 'openComponentFile',
+                filePath: item.dataset.filepath,
                 lineNumber: parseInt(item.dataset.line) || 1
             });
         });

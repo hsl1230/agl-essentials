@@ -38,21 +38,68 @@ export class FlowAnalyzerPanel extends AbstractPanel {
     // Generate Mermaid diagram
     const mermaidDiagram = this.flowAnalyzer.generateMermaidDiagram(this.currentResult);
     const dataFlowSummary = this.flowAnalyzer.generateDataFlowSummary(this.currentResult);
+    const componentTree = this.flowAnalyzer.generateComponentTree(this.currentResult.middlewares);
 
     // Send to webview
     this.panel?.webview.postMessage({
       command: 'analysisResult',
       content: {
         endpoint,
-        middlewares: this.currentResult.middlewares,
+        middlewares: this.serializeMiddlewares(this.currentResult.middlewares),
         mermaidDiagram,
         dataFlowSummary,
+        componentTree,
+        componentDataFlow: this.currentResult.componentDataFlow,
         allProperties: Array.from(this.currentResult.allResLocalsProperties.entries()).map(([key, value]) => ({
           property: key,
           ...value
         }))
       }
     });
+  }
+
+  /**
+   * Serialize middlewares for webview (components included)
+   */
+  private serializeMiddlewares(middlewares: any[]): any[] {
+    return middlewares.map(mw => ({
+      name: mw.name,
+      filePath: mw.filePath,
+      exists: mw.exists,
+      resLocalsReads: mw.resLocalsReads,
+      resLocalsWrites: mw.resLocalsWrites,
+      externalCalls: mw.externalCalls,
+      configDeps: mw.configDeps,
+      internalDeps: mw.internalDeps,
+      runFunctionLine: mw.runFunctionLine,
+      panicFunctionLine: mw.panicFunctionLine,
+      components: this.serializeComponents(mw.components),
+      allResLocalsReads: mw.allResLocalsReads,
+      allResLocalsWrites: mw.allResLocalsWrites,
+      allExternalCalls: mw.allExternalCalls,
+      allConfigDeps: mw.allConfigDeps
+    }));
+  }
+
+  /**
+   * Serialize components recursively
+   */
+  private serializeComponents(components: any[]): any[] {
+    return components.map(comp => ({
+      name: comp.name,
+      displayName: comp.displayName,
+      filePath: comp.filePath,
+      exists: comp.exists,
+      depth: comp.depth,
+      parentPath: comp.parentPath,
+      resLocalsReads: comp.resLocalsReads,
+      resLocalsWrites: comp.resLocalsWrites,
+      externalCalls: comp.externalCalls,
+      configDeps: comp.configDeps,
+      exportedFunctions: comp.exportedFunctions,
+      mainFunctionLine: comp.mainFunctionLine,
+      children: this.serializeComponents(comp.children)
+    }));
   }
 
   protected getMessageHandler(featureArg: any): (msg: any) => void {
@@ -70,6 +117,10 @@ export class FlowAnalyzerPanel extends AbstractPanel {
           await this.openMiddlewareFile(message.middlewarePath, message.lineNumber);
           break;
 
+        case 'openComponentFile':
+          await this.openFile(message.filePath, message.lineNumber);
+          break;
+
         case 'refreshAnalysis':
           if (this.currentResult) {
             this.analyzeAndDisplay(this.currentResult.endpoint);
@@ -78,6 +129,10 @@ export class FlowAnalyzerPanel extends AbstractPanel {
 
         case 'showMiddlewareDetail':
           this.showMiddlewareDetail(message.middlewareName);
+          break;
+
+        case 'showComponentDetail':
+          this.showComponentDetail(message.componentPath);
           break;
 
         case 'trackProperty':
@@ -103,7 +158,20 @@ export class FlowAnalyzerPanel extends AbstractPanel {
         return;
       }
 
-      const doc = await vscode.workspace.openTextDocument(fullPath);
+      await this.openFile(fullPath, lineNumber);
+    } catch (error: any) {
+      vscode.window.showErrorMessage(`Failed to open middleware: ${error.message}`);
+    }
+  }
+
+  private async openFile(filePath: string, lineNumber?: number): Promise<void> {
+    try {
+      if (!fs.existsSync(filePath)) {
+        vscode.window.showErrorMessage(`File not found: ${filePath}`);
+        return;
+      }
+
+      const doc = await vscode.workspace.openTextDocument(filePath);
       const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
 
       if (lineNumber && lineNumber > 0) {
@@ -112,7 +180,7 @@ export class FlowAnalyzerPanel extends AbstractPanel {
         editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
       }
     } catch (error: any) {
-      vscode.window.showErrorMessage(`Failed to open middleware: ${error.message}`);
+      vscode.window.showErrorMessage(`Failed to open file: ${error.message}`);
     }
   }
 
@@ -124,8 +192,41 @@ export class FlowAnalyzerPanel extends AbstractPanel {
 
     this.panel?.webview.postMessage({
       command: 'middlewareDetail',
-      content: middleware
+      content: {
+        ...middleware,
+        components: this.serializeComponents(middleware.components)
+      }
     });
+  }
+
+  private showComponentDetail(componentPath: string): void {
+    if (!this.currentResult) return;
+
+    // Find the component in the tree
+    const findComponent = (components: any[]): any | null => {
+      for (const comp of components) {
+        if (comp.filePath === componentPath) {
+          return comp;
+        }
+        const found = findComponent(comp.children);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    for (const mw of this.currentResult.middlewares) {
+      const component = findComponent(mw.components);
+      if (component) {
+        this.panel?.webview.postMessage({
+          command: 'componentDetail',
+          content: {
+            ...component,
+            children: this.serializeComponents(component.children)
+          }
+        });
+        return;
+      }
+    }
   }
 
   private trackProperty(property: string): void {
@@ -134,29 +235,46 @@ export class FlowAnalyzerPanel extends AbstractPanel {
     const info = this.currentResult.allResLocalsProperties.get(property);
     if (!info) return;
 
-    // Find all usages across middlewares
+    // Find all usages across middlewares and their components
     const usages: any[] = [];
-    this.currentResult.middlewares.forEach(mw => {
-      const writes = mw.resLocalsWrites.filter(w => w.property === property);
-      const reads = mw.resLocalsReads.filter(r => r.property === property);
+    
+    const collectUsages = (source: any, sourceName: string, isComponent: boolean) => {
+      const writes = source.resLocalsWrites?.filter((w: any) => w.property === property) || [];
+      const reads = source.resLocalsReads?.filter((r: any) => r.property === property) || [];
 
-      writes.forEach(w => {
+      writes.forEach((w: any) => {
         usages.push({
-          middleware: mw.name,
+          source: sourceName,
+          filePath: source.filePath,
+          isComponent,
           type: 'write',
           lineNumber: w.lineNumber,
           codeSnippet: w.codeSnippet
         });
       });
 
-      reads.forEach(r => {
+      reads.forEach((r: any) => {
         usages.push({
-          middleware: mw.name,
+          source: sourceName,
+          filePath: source.filePath,
+          isComponent,
           type: 'read',
           lineNumber: r.lineNumber,
           codeSnippet: r.codeSnippet
         });
       });
+    };
+
+    const collectFromComponents = (components: any[], parentName: string) => {
+      for (const comp of components) {
+        collectUsages(comp, `${parentName} → ${comp.displayName}`, true);
+        collectFromComponents(comp.children, `${parentName} → ${comp.displayName}`);
+      }
+    };
+
+    this.currentResult.middlewares.forEach(mw => {
+      collectUsages(mw, mw.name, false);
+      collectFromComponents(mw.components, mw.name);
     });
 
     this.panel?.webview.postMessage({

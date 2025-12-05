@@ -1,9 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+    ComponentAnalysis,
     ConfigDependency,
     ExternalCall,
     MiddlewareAnalysis,
+    RequireInfo,
     ResLocalsUsage
 } from '../models/flow-analyzer-types';
 
@@ -12,9 +14,13 @@ import {
  * - res.locals reads/writes
  * - External service calls
  * - Configuration dependencies
- * - Internal module dependencies
+ * - Internal module dependencies (components)
+ * - Recursively analyzes all components
  */
 export class MiddlewareAnalyzer {
+  private analyzedPaths = new Set<string>();
+  private readonly MAX_DEPTH = 10;
+
   constructor(
     private workspaceFolder: string,
     private middlewareName: string
@@ -24,10 +30,28 @@ export class MiddlewareAnalyzer {
     return path.join(this.workspaceFolder, `agl-${this.middlewareName}-middleware`);
   }
 
+  private get aglCoreRoot(): string {
+    return path.join(this.workspaceFolder, 'agl-core');
+  }
+
+  private get aglUtilsRoot(): string {
+    return path.join(this.workspaceFolder, 'agl-utils');
+  }
+
+  private get aglCacheRoot(): string {
+    return path.join(this.workspaceFolder, 'agl-cache');
+  }
+
+  private get aglLoggerRoot(): string {
+    return path.join(this.workspaceFolder, 'agl-logger');
+  }
+
   /**
-   * Analyze a single middleware file
+   * Analyze a single middleware file with deep component analysis
    */
   public analyzeMiddleware(middlewarePath: string): MiddlewareAnalysis {
+    this.analyzedPaths.clear();
+
     const result: MiddlewareAnalysis = {
       name: middlewarePath,
       filePath: '',
@@ -36,10 +60,14 @@ export class MiddlewareAnalyzer {
       resLocalsWrites: [],
       externalCalls: [],
       configDeps: [],
-      internalDeps: []
+      internalDeps: [],
+      components: [],
+      allResLocalsReads: [],
+      allResLocalsWrites: [],
+      allExternalCalls: [],
+      allConfigDeps: []
     };
 
-    // Resolve file path
     let fullPath = path.join(this.middlewareRoot, `${middlewarePath}.js`);
     if (!fs.existsSync(fullPath)) {
       fullPath = path.join(this.middlewareRoot, `${middlewarePath}/index.js`);
@@ -52,16 +80,21 @@ export class MiddlewareAnalyzer {
 
     result.filePath = fullPath;
     result.exists = true;
+    this.analyzedPaths.add(fullPath);
 
     try {
       const content = fs.readFileSync(fullPath, 'utf-8');
       const lines = content.split('\n');
 
-      this.analyzeResLocals(lines, result);
-      this.analyzeExternalCalls(lines, result);
-      this.analyzeConfigDeps(lines, result);
-      this.analyzeInternalDeps(lines, result);
+      this.analyzeResLocals(lines, result.resLocalsReads, result.resLocalsWrites, fullPath);
+      this.analyzeExternalCalls(lines, result.externalCalls);
+      this.analyzeConfigDeps(lines, result.configDeps);
+      const requires = this.analyzeRequires(lines, fullPath);
+      result.internalDeps = requires.map(r => r.modulePath);
       this.findFunctionLocations(lines, result);
+
+      result.components = this.analyzeComponents(requires, fullPath, 0);
+      this.aggregateComponentData(result);
 
     } catch (error) {
       console.error(`Error analyzing ${middlewarePath}:`, error);
@@ -70,27 +103,208 @@ export class MiddlewareAnalyzer {
     return result;
   }
 
-  /**
-   * Analyze res.locals usage patterns
-   */
-  private analyzeResLocals(lines: string[], result: MiddlewareAnalysis): void {
-    const resLocalsPattern = /res\.locals\.(\w+(?:\.\w+)*)/g;
-    const assignmentPatterns = [
-      // Direct assignment: res.locals.xxx = ...
-      /res\.locals\.(\w+(?:\.\w+)*)\s*=/,
-      // Object destructuring assignment won't produce writes
+  private analyzeRequires(lines: string[], currentFilePath: string): RequireInfo[] {
+    const requires: RequireInfo[] = [];
+    const currentDir = path.dirname(currentFilePath);
+
+    lines.forEach((line, index) => {
+      const lineNumber = index + 1;
+
+      const requirePatterns = [
+        /(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/,
+        /(?:const|let|var)\s+\{\s*([^}]+)\s*\}\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/,
+        /require\s*\(\s*['"]([^'"]+)['"]\s*\)/
+      ];
+
+      for (const pattern of requirePatterns) {
+        const match = line.match(pattern);
+        if (match) {
+          let variableName: string;
+          let modulePath: string;
+
+          if (match.length === 3) {
+            variableName = match[1].split(',')[0].trim();
+            modulePath = match[2];
+          } else {
+            variableName = '';
+            modulePath = match[1];
+          }
+
+          const isLocal = modulePath.startsWith('./') || modulePath.startsWith('../');
+          const isAglModule = modulePath.startsWith('@opus/agl-');
+
+          let resolvedPath: string | undefined;
+          if (isLocal) {
+            resolvedPath = this.resolveLocalPath(modulePath, currentDir);
+          } else if (isAglModule) {
+            resolvedPath = this.resolveAglModulePath(modulePath);
+          }
+
+          if (!requires.find(r => r.modulePath === modulePath)) {
+            requires.push({
+              modulePath,
+              variableName,
+              resolvedPath,
+              lineNumber,
+              isLocal,
+              isAglModule
+            });
+          }
+          break;
+        }
+      }
+    });
+
+    return requires;
+  }
+
+  private resolveLocalPath(modulePath: string, currentDir: string): string | undefined {
+    const basePath = path.resolve(currentDir, modulePath);
+    const candidates = [
+      `${basePath}.js`,
+      `${basePath}.ts`,
+      path.join(basePath, 'index.js'),
+      path.join(basePath, 'index.ts')
     ];
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    return undefined;
+  }
+
+  private resolveAglModulePath(modulePath: string): string | undefined {
+    const moduleMap: { [key: string]: string } = {
+      '@opus/agl-core': this.aglCoreRoot,
+      '@opus/agl-utils': this.aglUtilsRoot,
+      '@opus/agl-cache': this.aglCacheRoot,
+      '@opus/agl-logger': this.aglLoggerRoot
+    };
+
+    const root = moduleMap[modulePath];
+    if (root) {
+      const indexPath = path.join(root, 'index.js');
+      if (fs.existsSync(indexPath)) {
+        return indexPath;
+      }
+    }
+    return undefined;
+  }
+
+  private analyzeComponents(requires: RequireInfo[], parentPath: string, depth: number): ComponentAnalysis[] {
+    if (depth >= this.MAX_DEPTH) {
+      return [];
+    }
+
+    const components: ComponentAnalysis[] = [];
+
+    for (const req of requires) {
+      if (!req.resolvedPath || this.analyzedPaths.has(req.resolvedPath)) {
+        continue;
+      }
+      if (!req.isLocal && !req.isAglModule) {
+        continue;
+      }
+
+      this.analyzedPaths.add(req.resolvedPath);
+      const component = this.analyzeComponent(req, parentPath, depth);
+      if (component && component.exists) {
+        components.push(component);
+      }
+    }
+
+    return components;
+  }
+
+  private analyzeComponent(requireInfo: RequireInfo, parentPath: string, depth: number): ComponentAnalysis | null {
+    const filePath = requireInfo.resolvedPath;
+    if (!filePath || !fs.existsSync(filePath)) {
+      return null;
+    }
+
+    const component: ComponentAnalysis = {
+      name: requireInfo.modulePath,
+      displayName: this.getDisplayName(requireInfo.modulePath),
+      filePath,
+      exists: true,
+      depth,
+      parentPath,
+      resLocalsReads: [],
+      resLocalsWrites: [],
+      externalCalls: [],
+      configDeps: [],
+      requires: [],
+      children: [],
+      exportedFunctions: []
+    };
+
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const lines = content.split('\n');
+
+      this.analyzeResLocals(lines, component.resLocalsReads, component.resLocalsWrites, filePath);
+      this.analyzeExternalCalls(lines, component.externalCalls);
+      this.analyzeConfigDeps(lines, component.configDeps);
+      component.requires = this.analyzeRequires(lines, filePath);
+      this.findExportedFunctions(lines, component);
+
+      component.children = this.analyzeComponents(component.requires, filePath, depth + 1);
+
+    } catch (error) {
+      console.error(`Error analyzing component ${requireInfo.modulePath}:`, error);
+    }
+
+    return component;
+  }
+
+  private getDisplayName(modulePath: string): string {
+    if (modulePath.startsWith('@opus/')) {
+      return modulePath.replace('@opus/', '');
+    }
+    const parts = modulePath.split('/');
+    return parts[parts.length - 1] || modulePath;
+  }
+
+  private aggregateComponentData(result: MiddlewareAnalysis): void {
+    result.allResLocalsReads = [...result.resLocalsReads];
+    result.allResLocalsWrites = [...result.resLocalsWrites];
+    result.allExternalCalls = [...result.externalCalls];
+    result.allConfigDeps = [...result.configDeps];
+
+    const collectFromComponent = (component: ComponentAnalysis) => {
+      result.allResLocalsReads.push(...component.resLocalsReads);
+      result.allResLocalsWrites.push(...component.resLocalsWrites);
+      result.allExternalCalls.push(...component.externalCalls);
+      result.allConfigDeps.push(...component.configDeps);
+
+      for (const child of component.children) {
+        collectFromComponent(child);
+      }
+    };
+
+    for (const component of result.components) {
+      collectFromComponent(component);
+    }
+
+    result.allResLocalsReads = this.deduplicateByPropertyAndSource(result.allResLocalsReads);
+    result.allResLocalsWrites = this.deduplicateByPropertyAndSource(result.allResLocalsWrites);
+  }
+
+  private analyzeResLocals(lines: string[], reads: ResLocalsUsage[], writes: ResLocalsUsage[], sourcePath: string): void {
+    const resLocalsPattern = /res\.locals\.(\w+(?:\.\w+)*)/g;
+    const assignmentPatterns = [/res\.locals\.(\w+(?:\.\w+)*)\s*=/];
 
     lines.forEach((line, index) => {
       const lineNumber = index + 1;
       let match;
+      resLocalsPattern.lastIndex = 0;
 
-      // Find all res.locals references
       while ((match = resLocalsPattern.exec(line)) !== null) {
         const property = match[1];
         const codeSnippet = line.trim();
 
-        // Check if this is a write operation
         const isWrite = assignmentPatterns.some(pattern => {
           const writeMatch = line.match(pattern);
           return writeMatch && writeMatch[1] === property;
@@ -101,51 +315,45 @@ export class MiddlewareAnalyzer {
           type: isWrite ? 'write' : 'read',
           lineNumber,
           codeSnippet,
-          fullPath: property
+          fullPath: property,
+          sourcePath
         };
 
         if (isWrite) {
-          // Avoid duplicates
-          if (!result.resLocalsWrites.find(w => w.property === property && w.lineNumber === lineNumber)) {
-            result.resLocalsWrites.push(usage);
+          if (!writes.find(w => w.property === property && w.lineNumber === lineNumber && w.sourcePath === sourcePath)) {
+            writes.push(usage);
           }
         } else {
-          if (!result.resLocalsReads.find(r => r.property === property && r.lineNumber === lineNumber)) {
-            result.resLocalsReads.push(usage);
+          if (!reads.find(r => r.property === property && r.lineNumber === lineNumber && r.sourcePath === sourcePath)) {
+            reads.push(usage);
           }
         }
       }
     });
-
-    // Deduplicate by property name (keep first occurrence)
-    result.resLocalsReads = this.deduplicateByProperty(result.resLocalsReads);
-    result.resLocalsWrites = this.deduplicateByProperty(result.resLocalsWrites);
   }
 
-  private deduplicateByProperty(usages: ResLocalsUsage[]): ResLocalsUsage[] {
-    const seen = new Set<string>();
-    return usages.filter(u => {
-      if (seen.has(u.property)) return false;
-      seen.add(u.property);
-      return true;
-    });
+  private deduplicateByPropertyAndSource(usages: ResLocalsUsage[]): ResLocalsUsage[] {
+    const seen = new Map<string, ResLocalsUsage>();
+    for (const u of usages) {
+      const key = `${u.property}:${u.sourcePath}`;
+      if (!seen.has(key)) {
+        seen.set(key, u);
+      }
+    }
+    return Array.from(seen.values());
   }
 
-  /**
-   * Analyze external service calls
-   */
-  private analyzeExternalCalls(lines: string[], result: MiddlewareAnalysis): void {
+  private analyzeExternalCalls(lines: string[], results: ExternalCall[]): void {
     const patterns = [
-      // DCQ calls
       { pattern: /wrapper\.callAVS\w*\([^,]+,[^,]+,[^,]+,[^,]+,\s*['"](\w+)['"]/g, type: 'dcq' as const },
       { pattern: /callAVSDCQTemplate\([^,]+,[^,]+,[^,]+,[^,]+,\s*['"](\w+)['"]/g, type: 'dcq' as const },
-      // HTTP client calls
       { pattern: /httpClient\.(get|post|put|delete)\s*\(/g, type: 'http' as const },
       { pattern: /request\.(get|post|put|delete)\s*\(/g, type: 'http' as const },
-      { pattern: /request-promise/g, type: 'http' as const },
-      // Elasticsearch
+      { pattern: /axios\.(get|post|put|delete)\s*\(/g, type: 'http' as const },
       { pattern: /elasticSearchUrl/g, type: 'elasticsearch' as const },
       { pattern: /avs-es-service/g, type: 'elasticsearch' as const },
+      { pattern: /wrapper\.callAVSMicroservice\s*\(/g, type: 'microservice' as const },
+      { pattern: /callAVSMicroservice\s*\(/g, type: 'microservice' as const },
     ];
 
     lines.forEach((line, index) => {
@@ -159,26 +367,19 @@ export class MiddlewareAnalyzer {
             type,
             lineNumber,
             template: type === 'dcq' ? match[1] : undefined,
-            method: type === 'http' ? match[1] : undefined
+            method: type === 'http' ? match[1] : undefined,
+            codeSnippet: line.trim()
           };
           
-          // Avoid duplicates
-          if (!result.externalCalls.find(e => 
-            e.type === call.type && 
-            e.template === call.template && 
-            e.lineNumber === call.lineNumber
-          )) {
-            result.externalCalls.push(call);
+          if (!results.find(e => e.type === call.type && e.template === call.template && e.lineNumber === call.lineNumber)) {
+            results.push(call);
           }
         }
       });
     });
   }
 
-  /**
-   * Analyze configuration dependencies
-   */
-  private analyzeConfigDeps(lines: string[], result: MiddlewareAnalysis): void {
+  private analyzeConfigDeps(lines: string[], results: ConfigDependency[]): void {
     const patterns = [
       { pattern: /appCache\.getMWareConfig\s*\(\s*['"](\w+)['"]/g, source: 'mWareConfig' as const },
       { pattern: /appCache\.getAppConfig\s*\(\s*['"]?(\w+)?['"]?\s*\)/g, source: 'appConfig' as const },
@@ -194,64 +395,49 @@ export class MiddlewareAnalyzer {
         const regex = new RegExp(pattern.source, pattern.flags);
         while ((match = regex.exec(line)) !== null) {
           const key = match[1] || 'default';
-          const dep: ConfigDependency = {
-            source,
-            key,
-            lineNumber
-          };
+          const dep: ConfigDependency = { source, key, lineNumber, codeSnippet: line.trim() };
 
-          if (!result.configDeps.find(d => d.source === source && d.key === key)) {
-            result.configDeps.push(dep);
+          if (!results.find(d => d.source === source && d.key === key)) {
+            results.push(dep);
           }
         }
       });
     });
   }
 
-  /**
-   * Analyze internal module dependencies
-   */
-  private analyzeInternalDeps(lines: string[], result: MiddlewareAnalysis): void {
-    const requirePattern = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
-    const importPattern = /import\s+.*\s+from\s+['"]([^'"]+)['"]/g;
-
-    const deps = new Set<string>();
-
-    lines.forEach((line) => {
-      let match;
-
-      while ((match = requirePattern.exec(line)) !== null) {
-        const dep = match[1];
-        if (!dep.startsWith('.') && !dep.startsWith('@opus/')) {
-          continue; // Skip local and opus packages for now
-        }
-        deps.add(dep);
-      }
-
-      while ((match = importPattern.exec(line)) !== null) {
-        const dep = match[1];
-        deps.add(dep);
-      }
-    });
-
-    result.internalDeps = Array.from(deps);
-  }
-
-  /**
-   * Find run and panic function locations
-   */
   private findFunctionLocations(lines: string[], result: MiddlewareAnalysis): void {
     lines.forEach((line, index) => {
       const lineNumber = index + 1;
-
-      // Match various patterns for run function
       if (/(?:module\.exports\.run|exports\.run|const run|function run)\s*=?\s*(?:\(|async)/.test(line)) {
         result.runFunctionLine = lineNumber;
       }
-
-      // Match panic function
       if (/(?:module\.exports\.panic|exports\.panic)\s*=/.test(line)) {
         result.panicFunctionLine = lineNumber;
+      }
+    });
+  }
+
+  private findExportedFunctions(lines: string[], component: ComponentAnalysis): void {
+    lines.forEach((line, index) => {
+      const lineNumber = index + 1;
+
+      const exportMatch = line.match(/module\.exports\.(\w+)\s*=/);
+      if (exportMatch) {
+        component.exportedFunctions.push(exportMatch[1]);
+        if (exportMatch[1] === 'execute' || exportMatch[1] === 'run') {
+          component.mainFunctionLine = lineNumber;
+        }
+      }
+
+      const exportsMatch = line.match(/^exports\.(\w+)\s*=/);
+      if (exportsMatch) {
+        component.exportedFunctions.push(exportsMatch[1]);
+      }
+
+      const moduleExportsObjMatch = line.match(/module\.exports\s*=\s*\{([^}]+)\}/);
+      if (moduleExportsObjMatch) {
+        const functions = moduleExportsObjMatch[1].split(',').map(f => f.trim().split(':')[0].trim());
+        component.exportedFunctions.push(...functions.filter(f => f));
       }
     });
   }
