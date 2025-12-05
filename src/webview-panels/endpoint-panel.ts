@@ -8,11 +8,10 @@ export class EndpointPanel extends AbstractPanel {
   constructor(
     workspaceFolder: string,
     middlewareName: string,
-    isDefaultMiddleware: boolean,
     context: vscode.ExtensionContext,
     private featureViewerManager: FeatureViewerManager
   ) {
-    super(workspaceFolder, middlewareName, isDefaultMiddleware, context);
+    super(workspaceFolder, middlewareName, context);
   }
 
   public get title(): string {

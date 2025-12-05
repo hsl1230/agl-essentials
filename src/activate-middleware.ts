@@ -149,11 +149,7 @@ function getFullMiddlewareName(configFileName: string, defaultMiddlewareName: st
     let middlewareName = '';
     for (const app of aglApps) {
         if (configFileName.includes(`\/agl-config-${app}\/`) || configFileName.includes(`\\agl-config-${app}\\`)) {
-            if (app === defaultMiddlewareName) {
-                middlewareName = 'agl-custom-middleware';
-            } else {
-                middlewareName = `agl-${app}-middleware`;
-            }
+            middlewareName = `agl-${app}-middleware`;
             break;
         }
     }

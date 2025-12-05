@@ -10,8 +10,8 @@ export class CommandService {
 
     private disposables: vscode.Disposable[] = [];
 
-    constructor(private workspaceFolder: string, defaultMiddlewareName: string, providerManager: ProviderManager, context: vscode.ExtensionContext) {
-        this.featureViewerManager = new FeatureViewerManager(workspaceFolder, defaultMiddlewareName, context, providerManager);
+    constructor(private workspaceFolder: string, providerManager: ProviderManager, context: vscode.ExtensionContext) {
+        this.featureViewerManager = new FeatureViewerManager(workspaceFolder, context, providerManager);
     }
 
     registerCommands(viewManager: ViewManager, providerManager: ProviderManager) {
@@ -22,7 +22,7 @@ export class CommandService {
                     return;
                 }
                 // Register Mapper Tree
-                const mapperTreeDataProvider = providerManager.createMapperTreeDataProvider(this.workspaceFolder, middlewareName, false);
+                const mapperTreeDataProvider = providerManager.createMapperTreeDataProvider(this.workspaceFolder, middlewareName);
                 viewManager.createView(`aglMappers-${middlewareName}`, mapperTreeDataProvider);
 
                 if (viewManager.exists(`aglEndpoints-${middlewareName}`)) {
@@ -91,7 +91,7 @@ function deriveTestFilePath(filePath: string): string {
     const baseName = path.basename(filePath, '.js'); // Remove ".js" extension
     let testDir = '';
 
-    const aglApps = ['proxy', 'content', 'main', 'mediaroom', 'page-composition', 'user', 'plus', 'safetynet', 'recording', 'stub', 'custom'];
+    const aglApps = ['proxy', 'content', 'main', 'mediaroom', 'page-composition', 'user', 'plus', 'safetynet', 'recording', 'stub'];
     const aglLibs = ['agl-core', 'agl-logger', 'agl-utils', 'agl-gulp', 'agl-cache'];
     aglApps.forEach(app => {
         if (dirName.includes(`\/agl-${app}-middleware\/`)) {

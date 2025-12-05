@@ -3,7 +3,7 @@ import { ViewManager } from './services/view-manager';
 
 export function activateDefaultMappersAndEndpoints(viewManager: ViewManager, providerManager: ProviderManager, workspaceFolder: string, middlewareName: string) {
       // Register Mapper Tree
-      const defaultMapperTreeDataProvider = providerManager.createMapperTreeDataProvider(workspaceFolder, middlewareName, true);
+      const defaultMapperTreeDataProvider = providerManager.createMapperTreeDataProvider(workspaceFolder, middlewareName);
       viewManager.createView(`aglMappers-${middlewareName}`, defaultMapperTreeDataProvider);
 
       // Register Endpoint Tree

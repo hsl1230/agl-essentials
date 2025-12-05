@@ -2,16 +2,21 @@
   "name": "agl-essentials",
   "displayName": "AGL Essentials",
   "description": "A VS Code extension for AGL development, including Mapper Viewer and Endpoint Viewer.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "henry-huang",
   "engines": {
     "vscode": "^1.99.3"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hsl1230/agl-essentials"
+  },
+  "homepage": "https://github.com/hsl1230/agl-essentials#readme",
   "categories": [
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:.custom-middleware-name"
+    "workspaceContains:**/agl-config-*/files/customRoutes.json"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -178,8 +183,8 @@
     "package": "vsce package"
   },
   "devDependencies": {
-    "@types/node": "^16.11.7",
-    "@types/vscode": "^1.99.0",
+    "@types/node": "^20.19.25",
+    "@types/vscode": "^1.99.1",
     "typescript": "^4.9.4"
   }
 }

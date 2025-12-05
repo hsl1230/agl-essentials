@@ -8,11 +8,10 @@ export class MapperPanel extends AbstractPanel {
   constructor(
     workspaceFolder: string,
     middlewareName: string,
-    isDefaultMiddleware: boolean,
     public readonly providerManager: ProviderManager,
     context: vscode.ExtensionContext
   ) {
-    super(workspaceFolder, middlewareName, isDefaultMiddleware, context);
+    super(workspaceFolder, middlewareName, context);
   }
 
   public get title(): string {

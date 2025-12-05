@@ -8,7 +8,6 @@ export abstract class AbstractPanel {
   constructor(
     public readonly workspaceFolder: string,
     public readonly middlewareName: string,
-    public readonly isDefaultMiddleware: boolean,
     public readonly context: vscode.ExtensionContext
   ) {
   }
@@ -18,11 +17,7 @@ export abstract class AbstractPanel {
   public abstract get featureName(): string;
 
   public get fullMiddlewareName(): string {
-    let fullMiddlewareName = 'agl-custom-middleware';
-    if (!this.isDefaultMiddleware) {
-      fullMiddlewareName = `agl-${this.middlewareName}-middleware`;
-    }
-    return fullMiddlewareName;
+    return `agl-${this.middlewareName}-middleware`;;
   }
 
   public abstract initAction(featureArg: any): void;

@@ -8,11 +8,10 @@ export class JsonConfigPanel extends AbstractPanel {
   constructor(
     workspaceFolder: string,
     middlewareName: string,
-    isDefaultMiddleware: boolean,
     private readonly configFileName: string,
     context: vscode.ExtensionContext
   ) {
-    super(workspaceFolder, middlewareName, isDefaultMiddleware, context);
+    super(workspaceFolder, middlewareName, context);
   }
 
   public get title(): string {
