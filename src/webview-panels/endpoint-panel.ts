@@ -45,6 +45,9 @@ export class EndpointPanel extends AbstractPanel {
         console.log('Open mapper viewer', message.mapperName);
         this.featureViewerManager.openFeatureViewer('mapper-viewer', message.mapperName, this.middlewareName);
         vscode.commands.executeCommand('aglEssentials.highlightNode', message.mapperName, this.middlewareName);
+      } else if (message.command === 'analyzeFlow') {
+        // Open Flow Analyzer for this endpoint
+        this.featureViewerManager.openFeatureViewer('flow-analyzer', message.endpoint, this.middlewareName);
       }
     };
 

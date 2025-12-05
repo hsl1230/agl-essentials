@@ -45,6 +45,30 @@ export class CommandService {
             vscode.commands.registerCommand('aglEssentials.openEndpointDetails', (endpoint, middlewareName) => {
                 this.featureViewerManager.openFeatureViewer('endpoint-viewer', endpoint, middlewareName);
             }),
+            vscode.commands.registerCommand('aglEssentials.analyzeEndpointFlow', (arg1, arg2) => {
+                // Support two calling patterns:
+                // 1. From context menu: arg1 = FeatureNode with endpointData and arguments[1] = middlewareName
+                // 2. From webview/direct: arg1 = endpoint, arg2 = middlewareName
+                let endpoint: any;
+                let middlewareName: string;
+                
+                if (arg1 && arg1.endpointData) {
+                    // Called from context menu - arg1 is FeatureNode
+                    endpoint = arg1.endpointData;
+                    middlewareName = arg1.arguments?.[1] || arg2;
+                } else {
+                    // Called directly with endpoint object
+                    endpoint = arg1;
+                    middlewareName = arg2;
+                }
+                
+                if (!endpoint || !middlewareName) {
+                    vscode.window.showErrorMessage('Missing endpoint or middleware information');
+                    return;
+                }
+                
+                this.featureViewerManager.openFeatureViewer('flow-analyzer', endpoint, middlewareName);
+            }),
             vscode.commands.registerCommand('aglEssentials.highlightNode', (mapperName: string, middlewareName) => {
                 const mapperTreeDataProvider = providerManager.getMapperTreeDataProvider(middlewareName);
                 mapperTreeDataProvider?.highlightTreeNodes(mapperName, viewManager.getView(`aglMappers-${middlewareName}`));

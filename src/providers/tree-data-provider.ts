@@ -23,8 +23,14 @@ export abstract class TreeDataProvider implements vscode.TreeDataProvider<Featur
             };
         }
 
-        // Set a custom context value for highlighted nodes
-        treeItem.contextValue = element.isHighlighted ? "highlightedNode" : "normalNode";
+        // Set context value: prioritize element's own contextValue, then check highlight status
+        if (element.contextValue) {
+            treeItem.contextValue = element.contextValue;
+        } else if (element.isHighlighted) {
+            treeItem.contextValue = "highlightedNode";
+        } else {
+            treeItem.contextValue = "normalNode";
+        }
 
         // Assign a unique resourceUri for highlighted nodes
         if (element.isHighlighted) {

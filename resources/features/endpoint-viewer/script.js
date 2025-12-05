@@ -1,8 +1,17 @@
 const vscode = acquireVsCodeApi();
 
+let currentEndpoint = null;
+
 document.addEventListener('DOMContentLoaded', () => {
     // Request the endpoint configuration from the extension
     vscode.postMessage({ command: 'webviewLoaded' });
+
+    // Setup Analyze Flow button
+    document.getElementById('analyze-flow-btn')?.addEventListener('click', () => {
+        if (currentEndpoint) {
+            vscode.postMessage({ command: 'analyzeFlow', endpoint: currentEndpoint });
+        }
+    });
 
     // Handle messages from the extension
     window.addEventListener('message', async (event) => {
@@ -10,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (message.command === 'endpointConfig') {
             const endpointConfig = message.content;
+            currentEndpoint = endpointConfig;
             displayEndpointContent(endpointConfig);
         } else if (message.command === 'error') {
             console.error('Error from extension:', message.message);

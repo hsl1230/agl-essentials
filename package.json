@@ -2,7 +2,7 @@
   "name": "agl-essentials",
   "displayName": "AGL Essentials",
   "description": "A VS Code extension for AGL development, including Mapper Viewer and Endpoint Viewer.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "henry-huang",
   "engines": {
     "vscode": "^1.99.3"
@@ -115,6 +115,11 @@
         "title": "Open Endpoint Viewer"
       },
       {
+        "command": "aglEssentials.analyzeEndpointFlow",
+        "title": "AGL: Analyze Endpoint Flow",
+        "icon": "$(search)"
+      },
+      {
         "command": "aglEssentials.highlightNode",
         "title": "Highlight Node"
       },
@@ -164,6 +169,16 @@
         {
           "command": "aglEssentials.highlightNode",
           "when": "viewItem == highlightedNode",
+          "group": "inline"
+        },
+        {
+          "command": "aglEssentials.analyzeEndpointFlow",
+          "when": "viewItem == endpointNode",
+          "group": "navigation"
+        },
+        {
+          "command": "aglEssentials.analyzeEndpointFlow",
+          "when": "viewItem == endpointNode",
           "group": "inline"
         }
       ],

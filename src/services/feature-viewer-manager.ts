@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { AbstractPanel } from '../webview-panels/abstract-panel';
 import { EndpointPanel } from '../webview-panels/endpoint-panel';
+import { FlowAnalyzerPanel } from '../webview-panels/flow-analyzer-panel';
 import { JsonConfigPanel } from '../webview-panels/json-config-panel';
 import { MapperPanel } from '../webview-panels/mapper-panel';
 import { ProviderManager } from './provider-manager';
@@ -21,6 +22,8 @@ export class FeatureViewerManager {
                 return new MapperPanel(this.workspaceFolder, middlewareName, this.providerManager, this.context);
             case 'endpoint-viewer':
                 return new EndpointPanel(this.workspaceFolder, middlewareName, this.context, this);
+            case 'flow-analyzer':
+                return new FlowAnalyzerPanel(this.workspaceFolder, middlewareName, this.context);
             case 'mware-config':
                 return new JsonConfigPanel(this.workspaceFolder, middlewareName,'mWareConfig', this.context);
             case 'custom-panic-config':

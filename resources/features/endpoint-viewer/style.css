@@ -6,6 +6,38 @@ body {
     background-color: #f9f9f9;
 }
 
+/* Endpoint Actions Bar */
+.endpoint-actions {
+    display: flex;
+    gap: 10px;
+    padding: 12px 20px;
+    background-color: #2d2d2d;
+    border-bottom: 1px solid #404040;
+}
+
+.action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background-color: #0e639c;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.action-btn:hover {
+    background-color: #1177bb;
+}
+
+.action-btn:active {
+    background-color: #0d5a8c;
+}
+
 /* Container for the JSON viewer */
 #jsonContent {
     margin: 20px auto;

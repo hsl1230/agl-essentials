@@ -49,7 +49,9 @@ export class EndpointTreeDataProvider extends TreeDataProvider {
                 name: `${endpoint.method.toUpperCase()} ${shortUri}`,
                 children: [],
                 command: 'aglEssentials.openEndpointDetails',
-                arguments: [endpoint, this.middlewareName]
+                arguments: [endpoint, this.middlewareName],
+                contextValue: 'endpointNode',
+                endpointData: endpoint
             };
             this.treeData.children.push(endpointNode);
         }
