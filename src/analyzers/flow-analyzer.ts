@@ -1,10 +1,10 @@
 import {
-    ComponentAnalysis,
-    ComponentDataFlowEdge,
-    DataFlowEdge,
-    EndpointConfig,
-    FlowAnalysisResult,
-    MiddlewareAnalysis
+  ComponentAnalysis,
+  ComponentDataFlowEdge,
+  DataFlowEdge,
+  EndpointConfig,
+  FlowAnalysisResult,
+  MiddlewareAnalysis
 } from '../models/flow-analyzer-types';
 import { MiddlewareAnalyzer } from './middleware-analyzer';
 

@@ -207,11 +207,15 @@ export class FlowAnalyzerPanel extends AbstractPanel {
         case 'toggleComponentExpansion':
           // Toggle expansion state for a component node
           const nodeId = message.nodeId;
+          this.log(`toggleComponentExpansion: nodeId=${nodeId}`);
           if (this.expandedNodes.has(nodeId)) {
             this.expandedNodes.delete(nodeId);
+            this.log(`Collapsed node: ${nodeId}`);
           } else {
             this.expandedNodes.add(nodeId);
+            this.log(`Expanded node: ${nodeId}`);
           }
+          this.log(`Current expanded nodes: ${Array.from(this.expandedNodes).join(', ')}`);
           this.regenerateDiagram();
           break;
 

@@ -341,7 +341,7 @@ window.addEventListener('message', event => {
 });
 
 // Handle analysis result
-function handleAnalysisResult(data) {
+async function handleAnalysisResult(data) {
     console.log('[FlowAnalyzer WebView] handleAnalysisResult called with data:', {
         hasEndpoint: !!data.endpoint,
         middlewaresCount: data.middlewares?.length,
@@ -357,7 +357,8 @@ function handleAnalysisResult(data) {
         console.log('[FlowAnalyzer WebView] Rendering endpoint info...');
         renderEndpointInfo(data.endpoint);
         console.log('[FlowAnalyzer WebView] Rendering mermaid diagram...');
-        renderMermaidDiagram(data.mermaidDiagram);
+        await renderMermaidDiagram(data.mermaidDiagram);
+        console.log('[FlowAnalyzer WebView] Mermaid diagram rendered!');
         console.log('[FlowAnalyzer WebView] Rendering middleware chain...');
         renderMiddlewareChain(data.middlewares);
         console.log('[FlowAnalyzer WebView] Rendering component tree...');
@@ -399,15 +400,29 @@ async function renderMermaidDiagram(diagram) {
         // Add click handlers to nodes - use a more robust selector
         setTimeout(() => {
             const nodes = viewport.querySelectorAll('.node');
+            console.log('[FlowAnalyzer] Found nodes:', nodes.length);
             nodes.forEach((node) => {
                 node.style.cursor = 'pointer';
                 
-                // Extract node info from id
-                const nodeId = node.id;
+                // Extract node info from id - Mermaid adds "flowchart-" prefix
+                let nodeId = node.id;
+                console.log('[FlowAnalyzer] Raw node ID:', nodeId);
+                
+                // Strip Mermaid prefix if present (e.g., "flowchart-MW1-0" -> "MW1")
+                if (nodeId.startsWith('flowchart-')) {
+                    // Format: flowchart-{nodeId}-{index}
+                    const parts = nodeId.split('-');
+                    // Remove 'flowchart' prefix and numeric suffix
+                    nodeId = parts.slice(1, -1).join('-');
+                    // Convert dashes back to underscores for component IDs
+                    nodeId = nodeId.replace(/-/g, '_');
+                }
+                console.log('[FlowAnalyzer] Parsed node ID:', nodeId);
                 
                 // Check if it's an external call node: MW{n}_ext{m}
                 const extMatch = nodeId.match(/MW(\d+)_ext(\d+)/);
                 if (extMatch) {
+                    console.log('[FlowAnalyzer] External call node:', nodeId);
                     const mwIndex = parseInt(extMatch[1]) - 1;
                     const extIndex = parseInt(extMatch[2]);
                     if (currentMiddlewares[mwIndex]) {
@@ -424,34 +439,49 @@ async function renderMermaidDiagram(diagram) {
                     return; // Don't process as middleware node
                 }
                 
-                // Check if it's a component node with children (expandable): MW{n}_c{...}
-                // These nodes have ▶ or ▼ indicator in their label
-                const compMatch = nodeId.match(/^(MW\d+_c[\d_c]+)$/);
+                // Check if it's a component node: MW{n}_c{...} (e.g., MW1_c0, MW1_c0_c1)
+                const compMatch = nodeId.match(/^(MW\d+(?:_c\d+)+)$/);
                 if (compMatch) {
+                    console.log('[FlowAnalyzer] Component node:', nodeId);
                     const compNodeId = compMatch[1];
                     const nodeLabel = node.querySelector('.nodeLabel')?.textContent || '';
                     const isExpandable = nodeLabel.includes('▶') || nodeLabel.includes('▼');
+                    console.log('[FlowAnalyzer] Component expandable:', isExpandable, 'label:', nodeLabel);
                     
-                    if (isExpandable) {
-                        node.addEventListener('click', (e) => {
-                            e.stopPropagation();
+                    node.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        console.log('[FlowAnalyzer] Component clicked:', compNodeId);
+                        
+                        if (isExpandable) {
                             // Toggle component expansion
+                            console.log('[FlowAnalyzer] Toggling expansion for:', compNodeId);
                             vscode.postMessage({
                                 command: 'toggleComponentExpansion',
                                 nodeId: compNodeId
                             });
-                        });
-                        return;
-                    }
+                        } else {
+                            // Show component detail in sidebar
+                            const comp = findComponentByNodeId(compNodeId);
+                            console.log('[FlowAnalyzer] Found component:', comp);
+                            if (comp) {
+                                sidebarHistory = [];
+                                currentSidebarItem = null;
+                                showComponentDetailSidebar(comp, false);
+                            }
+                        }
+                    });
+                    return;
                 }
                 
                 // Check if it's a middleware node: MW{n} or MW{n}_main
-                const mwMatch = nodeId.match(/MW(\d+)(?:_main)?(?!_ext|_c)/);
+                const mwMatch = nodeId.match(/^MW(\d+)(?:_main)?$/);
                 if (mwMatch) {
+                    console.log('[FlowAnalyzer] Middleware node:', nodeId);
                     const mwIndex = parseInt(mwMatch[1]) - 1;
                     if (currentMiddlewares[mwIndex]) {
                         node.addEventListener('click', (e) => {
                             e.stopPropagation();
+                            console.log('[FlowAnalyzer] Middleware clicked:', nodeId);
                             // Reset history when clicking from flow diagram
                             sidebarHistory = [];
                             currentSidebarItem = null;
@@ -664,6 +694,34 @@ function findComponentByPath(filePath) {
         if (found) return found;
     }
     return null;
+}
+
+/**
+ * Find component by node ID (e.g., "MW1_c0", "MW1_c0_c1")
+ * Node ID format: MW{mwIndex}_c{compIndex}[_c{childIndex}...]
+ */
+function findComponentByNodeId(nodeId) {
+    // Parse node ID: MW1_c0_c1 -> mwIndex=0, path=[0, 1]
+    const match = nodeId.match(/^MW(\d+)((?:_c\d+)+)$/);
+    if (!match) return null;
+    
+    const mwIndex = parseInt(match[1]) - 1;
+    const pathStr = match[2];  // e.g., "_c0_c1"
+    const pathParts = pathStr.match(/_c(\d+)/g);  // ["_c0", "_c1"]
+    
+    if (!currentMiddlewares[mwIndex]) return null;
+    
+    let components = currentMiddlewares[mwIndex].components;
+    let component = null;
+    
+    for (const part of pathParts) {
+        const idx = parseInt(part.replace('_c', ''));
+        if (!components || !components[idx]) return null;
+        component = components[idx];
+        components = component.children;
+    }
+    
+    return component;
 }
 
 function findInComponents(components, filePath) {
