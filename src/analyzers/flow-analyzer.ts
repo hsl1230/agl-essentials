@@ -283,11 +283,14 @@ export class FlowAnalyzer {
     // Collect visible components for all middlewares
     result.middlewares.forEach((mw, index) => {
       const mwId = `MW${index + 1}`;
+      const isMwExpanded = !expandedNodes.has(`${mwId}_collapsed`);
+      
       if (mw.filePath) {
         visibleFilePaths.add(mw.filePath);
         visibleComponentMap.set(mw.filePath, mwId);
       }
-      if (mw.components.length > 0) {
+      // Only collect child components if middleware is expanded
+      if (mw.components.length > 0 && isMwExpanded) {
         collectVisibleComponents(mw.components, mwId, '', true);
       }
     });
@@ -373,6 +376,8 @@ export class FlowAnalyzer {
       const hasWrites = mw.allResLocalsWrites.length > 0;
       const hasReads = mw.allResLocalsReads.length > 0;
       const mwId = `MW${index + 1}`;
+      const hasComponents = mw.components.length > 0;
+      const isMwExpanded = !expandedNodes.has(`${mwId}_collapsed`); // Default expanded, track collapsed state
 
       let nodeClass = '';
       if (hasWrites && hasReads) {
@@ -391,10 +396,23 @@ export class FlowAnalyzer {
       // Get middleware's direct external calls (from effectiveExternalCallsMap)
       const mwExternalCalls = mw.filePath ? effectiveExternalCallsMap.get(mw.filePath) : [];
 
-      // Create a subgraph for middleware with components
-      if (mw.components.length > 0) {
-        diagram += `    subgraph ${mwId}["${index + 1}. ${shortName}"]\n`;
-        diagram += `        ${mwId}_main["${shortName}"]${nodeClass}\n`;
+      // Build labels - toggle symbol goes on the main node (inside subgraph), not on subgraph title
+      const mwLabel = `${index + 1}. ${shortName}`;
+      let mainLabel = shortName;
+      let mainNodeClass = nodeClass;
+      if (hasComponents) {
+        const toggleSymbol = isMwExpanded ? '▼' : '▶';
+        const componentCount = this.countAllComponentsInMiddleware(mw);
+        mainLabel = isMwExpanded 
+          ? `${toggleSymbol}  ${shortName}`
+          : `${toggleSymbol}  ${shortName} (${componentCount})`;
+        mainNodeClass = ':::expandable'; // Use expandable style for nodes with toggle
+      }
+
+      // Create a subgraph for middleware with components (only if expanded)
+      if (hasComponents && isMwExpanded) {
+        diagram += `    subgraph ${mwId}["${mwLabel}"]\n`;
+        diagram += `        ${mwId}_main["${mainLabel}"]${mainNodeClass}\n`;
         
         // Add external call nodes as rounded rectangles inside the subgraph
         if (mwExternalCalls && mwExternalCalls.length > 0) {
@@ -408,8 +426,20 @@ export class FlowAnalyzer {
         );
         
         diagram += `    end\n`;
+      } else if (hasComponents && !isMwExpanded) {
+        // Collapsed middleware with components - show subgraph with just the main node
+        diagram += `    subgraph ${mwId}["${mwLabel}"]\n`;
+        diagram += `        ${mwId}_main["${mainLabel}"]${mainNodeClass}\n`;
+        
+        // Add external call nodes as rounded rectangles (only middleware's own calls when collapsed)
+        if (mwExternalCalls && mwExternalCalls.length > 0) {
+          diagram = this.addExternalCallNodes(diagram, mwExternalCalls, `${mwId}_main`, '        ');
+        }
+        
+        diagram += `    end\n`;
       } else {
-        diagram += `    ${mwId}["${index + 1}. ${shortName}"]${nodeClass}\n`;
+        // No components - simple node without subgraph
+        diagram += `    ${mwId}["${mwLabel}"]${nodeClass}\n`;
         
         // Add external call nodes as rounded rectangles
         if (mwExternalCalls && mwExternalCalls.length > 0) {
@@ -603,6 +633,17 @@ export class FlowAnalyzer {
     let count = comp.children.length;
     for (const child of comp.children) {
       count += this.countAllChildren(child);
+    }
+    return count;
+  }
+
+  /**
+   * Count all components in a middleware (including nested)
+   */
+  private countAllComponentsInMiddleware(mw: MiddlewareAnalysis): number {
+    let count = mw.components.length;
+    for (const comp of mw.components) {
+      count += this.countAllChildren(comp);
     }
     return count;
   }

@@ -634,6 +634,41 @@ body {
     border-color: var(--accent-blue);
 }
 
+/* Library properties - slightly dimmed to differentiate from app properties */
+.property-card.library-property {
+    background-color: var(--bg-tertiary, #1a1a1a);
+    opacity: 0.75;
+    border-style: dashed;
+}
+
+.property-card.library-property:hover {
+    opacity: 1;
+}
+
+/* Library separator */
+.library-separator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 16px 0 12px 0;
+    padding: 0 4px;
+}
+
+.library-separator .separator-line {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(to right, transparent, var(--border-color), transparent);
+}
+
+.library-separator .separator-label {
+    font-size: 11px;
+    color: var(--text-muted, #666);
+    white-space: nowrap;
+    padding: 2px 8px;
+    background-color: var(--bg-secondary);
+    border-radius: 4px;
+}
+
 .property-name {
     font-family: 'Consolas', 'Monaco', monospace;
     font-size: 13px;

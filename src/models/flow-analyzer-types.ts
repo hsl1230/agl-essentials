@@ -47,6 +47,7 @@ export interface ResLocalsUsage {
   codeSnippet: string;
   fullPath?: string;  // e.g., "seedData.containers" for nested properties
   sourcePath?: string; // Source file path where this usage occurs
+  isLibrary?: boolean; // Whether this usage is in a library file (agl-core, agl-utils, etc.)
 }
 
 export interface ExternalCall {
@@ -57,6 +58,7 @@ export interface ExternalCall {
   lineNumber: number;
   codeSnippet?: string;
   sourcePath?: string; // Source file path where this call occurs
+  isLibrary?: boolean; // Whether this call is in a library file (agl-core, agl-utils, etc.)
 }
 
 export interface ConfigDependency {

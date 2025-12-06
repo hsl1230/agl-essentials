@@ -402,13 +402,33 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
             zoomLevel = savedZoom;
             panState.currentTranslateX = savedTranslateX;
             panState.currentTranslateY = savedTranslateY;
+            applyZoom();
         } else {
-            // Reset pan/zoom on new diagram
+            // Center the diagram on new load
             zoomLevel = 1;
-            panState.currentTranslateX = 0;
-            panState.currentTranslateY = 0;
+            
+            // Wait a bit for the SVG to be fully rendered
+            requestAnimationFrame(() => {
+                const containerRect = container.getBoundingClientRect();
+                const svgElement = viewport.querySelector('svg');
+                
+                if (svgElement) {
+                    const svgRect = svgElement.getBoundingClientRect();
+                    
+                    // Calculate center position
+                    const centerX = (containerRect.width - svgRect.width) / 2;
+                    const centerY = Math.max(20, (containerRect.height - svgRect.height) / 2);
+                    
+                    panState.currentTranslateX = centerX;
+                    panState.currentTranslateY = centerY;
+                } else {
+                    panState.currentTranslateX = 0;
+                    panState.currentTranslateY = 0;
+                }
+                
+                applyZoom();
+            });
         }
-        applyZoom();
         
         // Add click handlers to nodes - use a more robust selector
         setTimeout(() => {
@@ -432,22 +452,22 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                 }
                 console.log('[FlowAnalyzer] Parsed node ID:', nodeId);
                 
-                // Check if it's an external call node: MW{n}_ext{m}
-                const extMatch = nodeId.match(/MW(\d+)_ext(\d+)/);
+                // Check if it's an external call node: 
+                // Formats: MW{n}_ext{m}, MW{n}_main_ext{m}, MW{n}_c{x}_ext{m}, MW{n}_c{x}_c{y}_ext{m}
+                const extMatch = nodeId.match(/^(MW\d+(?:_main|(?:_c\d+)*)?)_ext(\d+)$/);
                 if (extMatch) {
-                    console.log('[FlowAnalyzer] External call node:', nodeId);
-                    const mwIndex = parseInt(extMatch[1]) - 1;
+                    console.log('[FlowAnalyzer] External call node:', nodeId, 'parentId:', extMatch[1], 'extIdx:', extMatch[2]);
+                    const parentNodeId = extMatch[1];
                     const extIndex = parseInt(extMatch[2]);
-                    if (currentMiddlewares[mwIndex]) {
-                        const mw = currentMiddlewares[mwIndex];
-                        const allExternalCalls = mw.allExternalCalls || mw.externalCalls || [];
-                        const extCall = allExternalCalls[extIndex];
-                        if (extCall) {
-                            node.addEventListener('click', (e) => {
-                                e.stopPropagation();
-                                navigateToExternalCall(mw, extCall);
-                            });
-                        }
+                    
+                    // Find the external call from the data
+                    const extCall = findExternalCallByNodeId(parentNodeId, extIndex);
+                    if (extCall) {
+                        node.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            console.log('[FlowAnalyzer] External call clicked:', extCall);
+                            navigateToExternalCall(null, extCall);
+                        });
                     }
                     return; // Don't process as middleware node
                 }
@@ -506,10 +526,13 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                 if (mwMatch) {
                     console.log('[FlowAnalyzer] Middleware node:', nodeId);
                     const mwIndex = parseInt(mwMatch[1]) - 1;
+                    const mwId = `MW${mwMatch[1]}`;
                     const mw = currentMiddlewares[mwIndex];
                     if (mw) {
                         const nodeLabel = node.querySelector('.nodeLabel')?.textContent || '';
                         const hasExternalCalls = nodeLabel.includes('📡');
+                        const hasToggle = nodeLabel.includes('▶') || nodeLabel.includes('▼');
+                        const hasComponents = mw.components && mw.components.length > 0;
                         
                         node.addEventListener('click', (e) => {
                             e.stopPropagation();
@@ -519,7 +542,18 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                             const nodeWidth = rect.width;
                             const clickRatio = clickX / nodeWidth;
                             
-                            if (hasExternalCalls && clickRatio > 0.80) {
+                            // Determine click zones:
+                            // - Left 20%: toggle (if has toggle/components)
+                            // - Right 20%: external calls (if has 📡)
+                            // - Middle: detail view
+                            
+                            if ((hasToggle || hasComponents) && clickRatio < 0.20) {
+                                console.log('[FlowAnalyzer] Toggle clicked for middleware:', mwId);
+                                vscode.postMessage({
+                                    command: 'toggleMiddlewareExpansion',
+                                    nodeId: mwId
+                                });
+                            } else if (hasExternalCalls && clickRatio > 0.80) {
                                 console.log('[FlowAnalyzer] External calls clicked for middleware:', nodeId);
                                 sidebarHistory = [];
                                 currentSidebarItem = null;
@@ -539,17 +573,65 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
     }
 }
 
+// Find external call by parent node ID and index
+function findExternalCallByNodeId(parentNodeId, extIndex) {
+    if (!currentMiddlewares) return null;
+    
+    // Parse the parent node ID to find the middleware and component
+    // Formats: MW1, MW1_main, MW1_c0, MW1_c0_c1, etc.
+    const mwMatch = parentNodeId.match(/^MW(\d+)/);
+    if (!mwMatch) return null;
+    
+    const mwIndex = parseInt(mwMatch[1]) - 1;
+    const mw = currentMiddlewares[mwIndex];
+    if (!mw) return null;
+    
+    // Check if it's a component node (has _c in the ID)
+    const compParts = parentNodeId.match(/_c(\d+)/g);
+    
+    if (!compParts || compParts.length === 0 || parentNodeId.includes('_main')) {
+        // It's the middleware main node - get external calls from middleware
+        const allCalls = mw.allExternalCalls || mw.externalCalls || [];
+        // Filter to get only middleware's direct external calls (matching sourcePath)
+        const mwDirectCalls = allCalls.filter(c => c.sourcePath === mw.filePath);
+        return mwDirectCalls[extIndex] || allCalls[extIndex];
+    }
+    
+    // Navigate through component tree to find the component
+    let currentComponents = mw.components || [];
+    let component = null;
+    
+    for (const part of compParts) {
+        const idx = parseInt(part.replace('_c', ''));
+        if (currentComponents && currentComponents[idx]) {
+            component = currentComponents[idx];
+            currentComponents = component.children || [];
+        } else {
+            return null;
+        }
+    }
+    
+    if (component) {
+        const compCalls = component.externalCalls || [];
+        return compCalls[extIndex];
+    }
+    
+    return null;
+}
+
 // Navigate to external call source code
 function navigateToExternalCall(middleware, extCall) {
     // Find the source file and line number for this external call
-    const sourcePath = extCall.sourcePath || middleware.filePath;
+    const sourcePath = extCall.sourcePath || (middleware ? middleware.filePath : null);
     const lineNumber = extCall.lineNumber || extCall.line || 1;
     
     if (sourcePath) {
         openFile(sourcePath, lineNumber, false);
-    } else {
+    } else if (middleware) {
         // Fallback: open middleware file at the call line
         openFile(null, lineNumber, true, middleware.name);
+    } else {
+        console.error('Cannot navigate: no source path and no middleware context');
     }
 }
 
@@ -782,31 +864,40 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
     const container = document.getElementById('property-list');
     container.innerHTML = '';
     
-    // Group by data source type
+    // Group by data source type - separate application and library usages
     const dataGroups = {
-        'res.locals': [],
-        'req.transaction': [],
-        'req.query': [],
-        'req.body': [],
-        'req.params': [],
-        'req.headers': [],
-        'req.cookies': [],
-        'res.cookie': [],
-        'res.header': []
+        'res.locals': { app: [], lib: [] },
+        'req.transaction': { app: [], lib: [] },
+        'req.query': { app: [], lib: [] },
+        'req.body': { app: [], lib: [] },
+        'req.params': { app: [], lib: [] },
+        'req.headers': { app: [], lib: [] },
+        'req.cookies': { app: [], lib: [] },
+        'res.cookie': { app: [], lib: [] },
+        'res.header': { app: [], lib: [] }
     };
     
     // First, process res.locals - count actual usages from middlewares and components
-    const resLocalsCountMap = new Map(); // property -> { writeCount, readCount }
+    // Separate app vs library counts
+    const resLocalsCountMap = new Map(); // property -> { appWriteCount, appReadCount, libWriteCount, libReadCount }
     
     const countResLocalsFromSource = (source) => {
         (source.resLocalsWrites || []).forEach(w => {
-            const entry = resLocalsCountMap.get(w.property) || { writeCount: 0, readCount: 0 };
-            entry.writeCount++;
+            const entry = resLocalsCountMap.get(w.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
+            if (w.isLibrary) {
+                entry.libWriteCount++;
+            } else {
+                entry.appWriteCount++;
+            }
             resLocalsCountMap.set(w.property, entry);
         });
         (source.resLocalsReads || []).forEach(r => {
-            const entry = resLocalsCountMap.get(r.property) || { writeCount: 0, readCount: 0 };
-            entry.readCount++;
+            const entry = resLocalsCountMap.get(r.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
+            if (r.isLibrary) {
+                entry.libReadCount++;
+            } else {
+                entry.appReadCount++;
+            }
             resLocalsCountMap.set(r.property, entry);
         });
     };
@@ -823,28 +914,50 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
         countFromComponents(mw.components);
     });
     
-    // Build res.locals entries from properties list
+    // Build res.locals entries from properties list - separate app and library
     (properties || []).forEach(prop => {
-        const counts = resLocalsCountMap.get(prop.property) || { writeCount: 0, readCount: 0 };
-        dataGroups['res.locals'].push({
-            property: prop.property,
-            writeCount: counts.writeCount,
-            readCount: counts.readCount
-        });
+        const counts = resLocalsCountMap.get(prop.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
+        const hasAppUsage = counts.appWriteCount > 0 || counts.appReadCount > 0;
+        const hasLibUsage = counts.libWriteCount > 0 || counts.libReadCount > 0;
+        
+        if (hasAppUsage) {
+            dataGroups['res.locals'].app.push({
+                property: prop.property,
+                writeCount: counts.appWriteCount,
+                readCount: counts.appReadCount
+            });
+        }
+        if (hasLibUsage && !hasAppUsage) {
+            // Only show in library section if no app usage
+            dataGroups['res.locals'].lib.push({
+                property: prop.property,
+                writeCount: counts.libWriteCount,
+                readCount: counts.libReadCount,
+                isLibrary: true
+            });
+        }
     });
     
     // Process req.transaction - count actual usages from middlewares and components
-    const reqTransactionCountMap = new Map(); // property -> { writeCount, readCount }
+    const reqTransactionCountMap = new Map(); // property -> { appWriteCount, appReadCount, libWriteCount, libReadCount }
     
     const countReqTransactionFromSource = (source) => {
         (source.reqTransactionWrites || []).forEach(w => {
-            const entry = reqTransactionCountMap.get(w.property) || { writeCount: 0, readCount: 0 };
-            entry.writeCount++;
+            const entry = reqTransactionCountMap.get(w.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
+            if (w.isLibrary) {
+                entry.libWriteCount++;
+            } else {
+                entry.appWriteCount++;
+            }
             reqTransactionCountMap.set(w.property, entry);
         });
         (source.reqTransactionReads || []).forEach(r => {
-            const entry = reqTransactionCountMap.get(r.property) || { writeCount: 0, readCount: 0 };
-            entry.readCount++;
+            const entry = reqTransactionCountMap.get(r.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
+            if (r.isLibrary) {
+                entry.libReadCount++;
+            } else {
+                entry.appReadCount++;
+            }
             reqTransactionCountMap.set(r.property, entry);
         });
     };
@@ -861,14 +974,27 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
         countReqTransactionFromComponents(mw.components);
     });
     
-    // Build req.transaction entries from properties list
+    // Build req.transaction entries from properties list - separate app and library
     (reqTransactionProperties || []).forEach(prop => {
-        const counts = reqTransactionCountMap.get(prop.property) || { writeCount: 0, readCount: 0 };
-        dataGroups['req.transaction'].push({
-            property: prop.property,
-            writeCount: counts.writeCount,
-            readCount: counts.readCount
-        });
+        const counts = reqTransactionCountMap.get(prop.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
+        const hasAppUsage = counts.appWriteCount > 0 || counts.appReadCount > 0;
+        const hasLibUsage = counts.libWriteCount > 0 || counts.libReadCount > 0;
+        
+        if (hasAppUsage) {
+            dataGroups['req.transaction'].app.push({
+                property: prop.property,
+                writeCount: counts.appWriteCount,
+                readCount: counts.appReadCount
+            });
+        }
+        if (hasLibUsage && !hasAppUsage) {
+            dataGroups['req.transaction'].lib.push({
+                property: prop.property,
+                writeCount: counts.libWriteCount,
+                readCount: counts.libReadCount,
+                isLibrary: true
+            });
+        }
     });
     
     // Collect other data usages from middlewares
@@ -880,12 +1006,14 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
                 if (usage.sourceType === 'res.locals') return;
                 
                 if (dataGroups[usage.sourceType]) {
-                    const existing = dataGroups[usage.sourceType].find(u => u.property === usage.property);
+                    const targetGroup = usage.isLibrary ? 'lib' : 'app';
+                    const existing = dataGroups[usage.sourceType][targetGroup].find(u => u.property === usage.property);
                     if (!existing) {
-                        dataGroups[usage.sourceType].push({
+                        dataGroups[usage.sourceType][targetGroup].push({
                             property: usage.property,
                             writeCount: usage.type === 'write' ? 1 : 0,
-                            readCount: usage.type === 'read' ? 1 : 0
+                            readCount: usage.type === 'read' ? 1 : 0,
+                            isLibrary: usage.isLibrary
                         });
                     } else {
                         if (usage.type === 'write') existing.writeCount++;
@@ -906,21 +1034,36 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
         collectFromComponents(mw.components);
     });
     
-    // Render each group
-    Object.entries(dataGroups).forEach(([sourceType, props]) => {
-        if (props.length === 0) return;
+    // Render each group - app properties first, then library properties at bottom
+    Object.entries(dataGroups).forEach(([sourceType, { app: appProps, lib: libProps }]) => {
+        const totalCount = appProps.length + libProps.length;
+        if (totalCount === 0) return;
         
         const section = document.createElement('div');
         section.className = 'data-section';
-        section.innerHTML = `
-            <div class="data-section-header">
-                <span class="data-section-icon">${getDataSourceIcon(sourceType)}</span>
-                <span class="data-section-title">${sourceType}</span>
-                <span class="data-section-count">${props.length}</span>
+        
+        // Render app properties
+        const appItemsHtml = appProps.map(prop => `
+            <div class="property-card" data-property="${prop.property}" data-source="${sourceType}">
+                <div class="property-name">${prop.property}</div>
+                <div class="property-flow">
+                    ${prop.writeCount > 0 ? `<span class="producers">📤 ${prop.writeCount}</span>` : ''}
+                    ${prop.readCount > 0 ? `<span class="consumers">📥 ${prop.readCount}</span>` : ''}
+                </div>
             </div>
-            <div class="data-section-items">
-                ${props.map(prop => `
-                    <div class="property-card" data-property="${prop.property}" data-source="${sourceType}">
+        `).join('');
+        
+        // Render library properties (if any) with a separator
+        let libItemsHtml = '';
+        if (libProps.length > 0) {
+            libItemsHtml = `
+                <div class="library-separator">
+                    <span class="separator-line"></span>
+                    <span class="separator-label">📚 Library (${libProps.length})</span>
+                    <span class="separator-line"></span>
+                </div>
+                ${libProps.map(prop => `
+                    <div class="property-card library-property" data-property="${prop.property}" data-source="${sourceType}">
                         <div class="property-name">${prop.property}</div>
                         <div class="property-flow">
                             ${prop.writeCount > 0 ? `<span class="producers">📤 ${prop.writeCount}</span>` : ''}
@@ -928,6 +1071,18 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
                         </div>
                     </div>
                 `).join('')}
+            `;
+        }
+        
+        section.innerHTML = `
+            <div class="data-section-header">
+                <span class="data-section-icon">${getDataSourceIcon(sourceType)}</span>
+                <span class="data-section-title">${sourceType}</span>
+                <span class="data-section-count">${appProps.length}${libProps.length > 0 ? ` + ${libProps.length}` : ''}</span>
+            </div>
+            <div class="data-section-items">
+                ${appItemsHtml}
+                ${libItemsHtml}
             </div>
         `;
         container.appendChild(section);

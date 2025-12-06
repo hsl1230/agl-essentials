@@ -219,6 +219,23 @@ export class FlowAnalyzerPanel extends AbstractPanel {
           this.regenerateDiagram();
           break;
 
+        case 'toggleMiddlewareExpansion':
+          // Toggle expansion state for a middleware node
+          // We use MW{n}_collapsed to track collapsed state (default is expanded)
+          const mwNodeId = message.nodeId;
+          const collapsedId = `${mwNodeId}_collapsed`;
+          this.log(`toggleMiddlewareExpansion: nodeId=${mwNodeId}`);
+          if (this.expandedNodes.has(collapsedId)) {
+            this.expandedNodes.delete(collapsedId);
+            this.log(`Expanded middleware: ${mwNodeId}`);
+          } else {
+            this.expandedNodes.add(collapsedId);
+            this.log(`Collapsed middleware: ${mwNodeId}`);
+          }
+          this.log(`Current expanded nodes: ${Array.from(this.expandedNodes).join(', ')}`);
+          this.regenerateDiagram();
+          break;
+
         case 'showMiddlewareDetail':
           this.showMiddlewareDetail(message.middlewareName);
           break;

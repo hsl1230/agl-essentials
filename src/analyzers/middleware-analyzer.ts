@@ -68,6 +68,41 @@ export class MiddlewareAnalyzer {
   }
 
   /**
+   * Check if a file path belongs to a low-level library (agl-core, agl-utils, etc.)
+   * These files contain infrastructure code rather than business logic
+   */
+  private isLibraryPath(filePath: string): boolean {
+    if (!filePath) return false;
+    
+    const libraryPatterns = [
+      // agl-utils library files
+      /agl-utils[/\\]lib[/\\]/i,
+      /agl-utils[/\\]index\.js$/i,
+      
+      // agl-core utility files
+      /agl-core[/\\]utils[/\\]wrapper[/\\]/i,
+      /agl-core[/\\]utils[/\\]panic/i,
+      /agl-core[/\\]shared[/\\]/i,
+      /agl-core[/\\]index\.js$/i,
+      
+      // agl-cache files
+      /agl-cache[/\\]/i,
+      
+      // agl-logger files
+      /agl-logger[/\\]/i,
+      
+      // Local utils/wrapper in middleware projects
+      /utils[/\\]wrapper[/\\]request[/\\]/i,
+      /utils[/\\]wrapper[/\\]response[/\\]/i,
+      
+      // Shared utility files in middleware projects
+      /shared[/\\].*[/\\](wrapper|request|http)/i,
+    ];
+    
+    return libraryPatterns.some(pattern => pattern.test(filePath));
+  }
+
+  /**
    * Analyze a single middleware file with deep component analysis
    */
   public analyzeMiddleware(middlewarePath: string): MiddlewareAnalysis {
@@ -569,6 +604,9 @@ export class MiddlewareAnalyzer {
   }
 
   private analyzeResLocals(lines: string[], reads: ResLocalsUsage[], writes: ResLocalsUsage[], sourcePath: string): void {
+    // Check if this is a library file - we still analyze it but mark the results
+    const isLibrary = this.isLibraryPath(sourcePath);
+
     // Support both res.locals and response.locals
     const resLocalsPattern = /(?:res|response)\.locals\.(\w+(?:\.\w+)*)/g;
     
@@ -605,7 +643,8 @@ export class MiddlewareAnalyzer {
             lineNumber,
             codeSnippet: line.trim(),
             fullPath: property,
-            sourcePath
+            sourcePath,
+            isLibrary
           });
         }
       }
@@ -626,6 +665,25 @@ export class MiddlewareAnalyzer {
         if (methodMatch && /^\s*\(/.test(afterMatch)) {
           isMutationMethodCall = true;
           property = property.substring(0, property.length - methodMatch[0].length);
+        }
+        
+        // Skip JavaScript native array/object methods and properties
+        // These are not actual data properties set by the application
+        const nativeMethodsAndProps = [
+          'length', 'indexOf', 'find', 'findIndex', 'filter', 'map', 'reduce', 'reduceRight',
+          'forEach', 'some', 'every', 'includes', 'slice', 'concat', 'join', 'flat', 'flatMap',
+          'keys', 'values', 'entries', 'at', 'toString', 'toLocaleString', 'constructor',
+          'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'valueOf'
+        ];
+        
+        // Check if the property ends with a native method/property being called or accessed
+        const propertyParts = property.split('.');
+        const lastPart = propertyParts[propertyParts.length - 1];
+        if (nativeMethodsAndProps.includes(lastPart)) {
+          // Remove the native method/property part to get the actual data property
+          propertyParts.pop();
+          if (propertyParts.length === 0) continue; // Skip if only native method
+          property = propertyParts.join('.');
         }
 
         // Determine if write operation
@@ -653,13 +711,14 @@ export class MiddlewareAnalyzer {
               lineNumber,
               codeSnippet,
               fullPath: property,
-              sourcePath
+              sourcePath,
+              isLibrary
             });
           }
           
           // Detect nested properties in object literal assignments
           if (/^\s*=(?!=)/.test(afterMatch)) {
-            this.extractNestedPropertiesFromObjectLiteral(lines, index, property, writes, sourcePath);
+            this.extractNestedPropertiesFromObjectLiteral(lines, index, property, writes, sourcePath, isLibrary);
           }
         } else {
           if (!seenReads.has(key)) {
@@ -670,7 +729,8 @@ export class MiddlewareAnalyzer {
               lineNumber,
               codeSnippet,
               fullPath: property,
-              sourcePath
+              sourcePath,
+              isLibrary
             });
           }
         }
@@ -688,7 +748,8 @@ export class MiddlewareAnalyzer {
     startLineIndex: number, 
     parentProperty: string, 
     writes: ResLocalsUsage[], 
-    sourcePath: string
+    sourcePath: string,
+    isLibrary: boolean = false
   ): void {
     // Find the object literal content - could span multiple lines (limit to 20 lines for performance)
     let objectContent = '';
@@ -711,7 +772,7 @@ export class MiddlewareAnalyzer {
           objectContent += char;
           if (started && braceCount === 0) {
             // Found complete object literal - only parse top level properties (no recursion for performance)
-            this.parseObjectLiteralPropertiesFlat(objectContent, parentProperty, writes, lineNumber, sourcePath);
+            this.parseObjectLiteralPropertiesFlat(objectContent, parentProperty, writes, lineNumber, sourcePath, isLibrary);
             return;
           }
         } else if (started) {
@@ -732,7 +793,8 @@ export class MiddlewareAnalyzer {
     parentProperty: string, 
     writes: ResLocalsUsage[], 
     lineNumber: number, 
-    sourcePath: string
+    sourcePath: string,
+    isLibrary: boolean = false
   ): void {
     // Simple regex-based parsing for top-level properties only
     // Match patterns like: propertyName: value, or 'propertyName': value, or "propertyName": value
@@ -754,7 +816,8 @@ export class MiddlewareAnalyzer {
         lineNumber,
         codeSnippet: `(initialized in object literal)`,
         fullPath: fullProperty,
-        sourcePath
+        sourcePath,
+        isLibrary
       };
       
       writes.push(usage);
@@ -998,36 +1061,8 @@ export class MiddlewareAnalyzer {
   }
 
   private analyzeExternalCalls(lines: string[], results: ExternalCall[], sourcePath: string): void {
-    // Skip analysis for low-level library files to avoid double counting
-    // External calls should only be counted at the business logic level (middleware and its direct components)
-    // Not in the underlying utility/wrapper implementations
-    const skipPatterns = [
-      // agl-utils library files - these are low-level HTTP implementations
-      /agl-utils[/\\]lib[/\\]/i,
-      /agl-utils[/\\]index\.js$/i,
-      
-      // agl-core utility files - these are wrapper implementations
-      /agl-core[/\\]utils[/\\]wrapper[/\\]/i,
-      /agl-core[/\\]shared[/\\]/i,
-      /agl-core[/\\]index\.js$/i,
-      
-      // agl-cache files
-      /agl-cache[/\\]/i,
-      
-      // agl-logger files
-      /agl-logger[/\\]/i,
-      
-      // Local utils/wrapper in middleware projects - these wrap agl-core
-      /utils[/\\]wrapper[/\\]request[/\\]/i,
-      /utils[/\\]wrapper[/\\]response[/\\]/i,
-      
-      // Shared utility files in middleware projects
-      /shared[/\\].*[/\\](wrapper|request|http)/i,
-    ];
-    
-    if (skipPatterns.some(pattern => pattern.test(sourcePath))) {
-      return; // Skip low-level wrapper files
-    }
+    // Check if this is a library file - we still analyze it but mark the results
+    const isLibrary = this.isLibraryPath(sourcePath);
 
     // Patterns that capture meaningful template/endpoint names
     const patterns: { pattern: RegExp, type: ExternalCall['type'], extractName?: boolean }[] = [
@@ -1084,7 +1119,8 @@ export class MiddlewareAnalyzer {
               lineNumber,
               template,
               codeSnippet: line.trim(),
-              sourcePath
+              sourcePath,
+              isLibrary
             });
           }
         }
@@ -1092,13 +1128,13 @@ export class MiddlewareAnalyzer {
     });
     
     // Second pass: detect HTTP client calls and extract meaningful names from context
-    this.detectHttpCalls(lines, results, seen, sourcePath);
+    this.detectHttpCalls(lines, results, seen, sourcePath, isLibrary);
   }
   
   /**
    * Detect HTTP client calls and extract meaningful endpoint names from context
    */
-  private detectHttpCalls(lines: string[], results: ExternalCall[], seen: Set<string>, sourcePath: string): void {
+  private detectHttpCalls(lines: string[], results: ExternalCall[], seen: Set<string>, sourcePath: string, isLibrary: boolean = false): void {
     const httpPatterns = [
       /aglUtils\.httpClient\s*\(/,
       /aglUtils\.forwardRequest\s*\(/,
@@ -1121,7 +1157,8 @@ export class MiddlewareAnalyzer {
               lineNumber,
               template: endpointName,
               codeSnippet: line.trim(),
-              sourcePath
+              sourcePath,
+              isLibrary
             });
           }
           break; // Only count once per line
