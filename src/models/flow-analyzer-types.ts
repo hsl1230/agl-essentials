@@ -50,7 +50,7 @@ export interface ResLocalsUsage {
 }
 
 export interface ExternalCall {
-  type: 'dcq' | 'microservice' | 'elasticsearch' | 'cache' | 'http';
+  type: 'dcq' | 'avs' | 'pinboard' | 'elasticsearch' | 'external' | 'ava' | 'dsf' | 'microservice' | 'cache' | 'http';
   template?: string;
   endpoint?: string;
   method?: string;

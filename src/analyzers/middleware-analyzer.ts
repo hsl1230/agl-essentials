@@ -23,6 +23,7 @@ import {
  */
 export class MiddlewareAnalyzer {
   private analyzedPaths = new Set<string>();
+  private analyzedComponents = new Map<string, ComponentAnalysis>();
   private readonly MAX_DEPTH = 10;
   private normalizedWorkspaceFolder: string;
 
@@ -71,6 +72,7 @@ export class MiddlewareAnalyzer {
    */
   public analyzeMiddleware(middlewarePath: string): MiddlewareAnalysis {
     this.analyzedPaths.clear();
+    this.analyzedComponents.clear();
     console.log(`[FlowAnalyzer] Starting analysis of: ${middlewarePath}`);
 
     const result: MiddlewareAnalysis = {
@@ -201,6 +203,16 @@ export class MiddlewareAnalyzer {
 
   private resolveLocalPath(modulePath: string, currentDir: string): string | undefined {
     const basePath = path.resolve(currentDir, modulePath);
+    
+    // If path already has an extension, check if it exists directly
+    if (modulePath.endsWith('.js') || modulePath.endsWith('.ts')) {
+      if (fs.existsSync(basePath)) {
+        return basePath;
+      }
+      return undefined;
+    }
+    
+    // Otherwise try adding extensions
     const candidates = [
       `${basePath}.js`,
       `${basePath}.ts`,
@@ -275,14 +287,21 @@ export class MiddlewareAnalyzer {
         continue;
       }
 
-      // Check if already analyzed - if so, create a shallow reference
+      // Check if already analyzed - if so, reuse the cached result
       const alreadyAnalyzed = this.analyzedPaths.has(req.resolvedPath);
       
       if (alreadyAnalyzed) {
-        // Create a shallow component reference (no deep analysis to avoid duplication)
-        const shallowComponent = this.createShallowComponent(req, parentPath, depth);
-        if (shallowComponent) {
-          components.push(shallowComponent);
+        // Reuse cached component (with all its children preserved)
+        const cachedComponent = this.analyzedComponents.get(req.resolvedPath);
+        if (cachedComponent) {
+          // Create a reference to the cached component (preserves children!)
+          const componentRef: ComponentAnalysis = {
+            ...cachedComponent,
+            depth, // Update depth for this occurrence
+            parentPath, // Update parent for this occurrence
+            isShallowReference: true
+          };
+          components.push(componentRef);
         }
       } else {
         // Full analysis for new components
@@ -290,6 +309,8 @@ export class MiddlewareAnalyzer {
         this.analyzedPaths.add(req.resolvedPath);
         const component = this.analyzeComponent(req, parentPath, depth);
         if (component && component.exists) {
+          // Cache the analyzed component
+          this.analyzedComponents.set(req.resolvedPath, component);
           components.push(component);
         }
       }
@@ -977,30 +998,83 @@ export class MiddlewareAnalyzer {
   }
 
   private analyzeExternalCalls(lines: string[], results: ExternalCall[], sourcePath: string): void {
-    const patterns = [
-      { pattern: /wrapper\.callAVS\w*\([^,]+,[^,]+,[^,]+,[^,]+,\s*['"](\w+)['"]/g, type: 'dcq' as const },
-      { pattern: /callAVSDCQTemplate\([^,]+,[^,]+,[^,]+,[^,]+,\s*['"](\w+)['"]/g, type: 'dcq' as const },
-      { pattern: /httpClient\.(get|post|put|delete)\s*\(/g, type: 'http' as const },
-      { pattern: /request\.(get|post|put|delete)\s*\(/g, type: 'http' as const },
-      { pattern: /axios\.(get|post|put|delete)\s*\(/g, type: 'http' as const },
-      { pattern: /elasticSearchUrl/g, type: 'elasticsearch' as const },
-      { pattern: /avs-es-service/g, type: 'elasticsearch' as const },
-      { pattern: /wrapper\.callAVSMicroservice\s*\(/g, type: 'microservice' as const },
-      { pattern: /callAVSMicroservice\s*\(/g, type: 'microservice' as const },
+    // Skip analysis for low-level library files to avoid double counting
+    // External calls should only be counted at the business logic level (middleware and its direct components)
+    // Not in the underlying utility/wrapper implementations
+    const skipPatterns = [
+      // agl-utils library files - these are low-level HTTP implementations
+      /agl-utils[/\\]lib[/\\]/i,
+      /agl-utils[/\\]index\.js$/i,
+      
+      // agl-core utility files - these are wrapper implementations
+      /agl-core[/\\]utils[/\\]wrapper[/\\]/i,
+      /agl-core[/\\]shared[/\\]/i,
+      /agl-core[/\\]index\.js$/i,
+      
+      // agl-cache files
+      /agl-cache[/\\]/i,
+      
+      // agl-logger files
+      /agl-logger[/\\]/i,
+      
+      // Local utils/wrapper in middleware projects - these wrap agl-core
+      /utils[/\\]wrapper[/\\]request[/\\]/i,
+      /utils[/\\]wrapper[/\\]response[/\\]/i,
+      
+      // Shared utility files in middleware projects
+      /shared[/\\].*[/\\](wrapper|request|http)/i,
+    ];
+    
+    if (skipPatterns.some(pattern => pattern.test(sourcePath))) {
+      return; // Skip low-level wrapper files
+    }
+
+    // Patterns that capture meaningful template/endpoint names
+    const patterns: { pattern: RegExp, type: ExternalCall['type'], extractName?: boolean }[] = [
+      // DCQ patterns - capture template name from last string argument
+      { pattern: /(?:wrapper\.)?callAVSDCQTemplate\s*\([^)]*,\s*['"](\w+)['"]\s*\)/g, type: 'dcq', extractName: true },
+      { pattern: /(?:wrapper\.)?callDCQ\s*\([^)]*,\s*['"](\w+)['"]/g, type: 'dcq', extractName: true },
+      
+      // AVS patterns - try to capture endpoint/template name
+      { pattern: /(?:wrapper\.)?callAVS\s*\([^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:wrapper\.)?callAVSB2B(?:Versioned)?\s*\([^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      
+      // Pinboard patterns
+      { pattern: /(?:wrapper\.)?callPinboard\s*\([^,]*,\s*['"]([^'"]+)['"]/g, type: 'pinboard', extractName: true },
+      
+      // Elasticsearch patterns - capture template name
+      { pattern: /(?:wrapper\.)?callAVSESTemplate\s*\([^)]*,\s*['"](\w+)['"]\s*\)/g, type: 'elasticsearch', extractName: true },
+      { pattern: /(?:wrapper\.)?callAVSESSearch\s*\([^)]*,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
+      { pattern: /(?:wrapper\.)?callDcqDecoupledESTemplate\s*\([^)]*,\s*['"](\w+)['"]\s*\)/g, type: 'elasticsearch', extractName: true },
+      { pattern: /(?:wrapper\.)?callES\s*\([^,]*,\s*['"]([^'"]+)['"]/g, type: 'elasticsearch', extractName: true },
+      
+      // External API patterns - capture URL or endpoint
+      { pattern: /(?:wrapper\.)?callExternal\s*\([^,]*,\s*['"]([^'"]+)['"]/g, type: 'external', extractName: true },
+      
+      // AVA patterns
+      { pattern: /callAVA\s*\([^,]*,\s*['"]([^'"]+)['"]/g, type: 'ava', extractName: true },
+      
+      // DSF patterns
+      { pattern: /callDsf\s*\([^,]*,\s*['"]([^'"]+)['"]/g, type: 'dsf', extractName: true },
+      
+      // Microservice patterns - capture service name
+      { pattern: /(?:wrapper\.)?callAVSMicroservice\s*\([^,]*,\s*['"]([^'"]+)['"]/g, type: 'microservice', extractName: true },
     ];
 
     // Use Set for O(1) deduplication
     const seen = new Set<string>();
     results.forEach(e => seen.add(`${e.type}:${e.template || ''}:${e.lineNumber}:${e.sourcePath}`));
 
+    // First pass: detect standard patterns
     lines.forEach((line, index) => {
       const lineNumber = index + 1;
 
-      for (const { pattern, type } of patterns) {
+      for (const { pattern, type, extractName } of patterns) {
         pattern.lastIndex = 0;
         let match;
         while ((match = pattern.exec(line)) !== null) {
-          const template = type === 'dcq' ? match[1] : undefined;
+          // Extract the template/endpoint name from the capture group
+          const template = extractName && match[1] ? match[1] : undefined;
           const key = `${type}:${template || ''}:${lineNumber}:${sourcePath}`;
           
           if (!seen.has(key)) {
@@ -1009,7 +1083,6 @@ export class MiddlewareAnalyzer {
               type,
               lineNumber,
               template,
-              method: type === 'http' ? match[1] : undefined,
               codeSnippet: line.trim(),
               sourcePath
             });
@@ -1017,6 +1090,88 @@ export class MiddlewareAnalyzer {
         }
       }
     });
+    
+    // Second pass: detect HTTP client calls and extract meaningful names from context
+    this.detectHttpCalls(lines, results, seen, sourcePath);
+  }
+  
+  /**
+   * Detect HTTP client calls and extract meaningful endpoint names from context
+   */
+  private detectHttpCalls(lines: string[], results: ExternalCall[], seen: Set<string>, sourcePath: string): void {
+    const httpPatterns = [
+      /aglUtils\.httpClient\s*\(/,
+      /aglUtils\.forwardRequest\s*\(/,
+      /aglUtils\.v2\.httpClient\s*\(/,
+    ];
+    
+    lines.forEach((line, index) => {
+      const lineNumber = index + 1;
+      
+      for (const pattern of httpPatterns) {
+        if (pattern.test(line)) {
+          // Try to extract meaningful endpoint name from surrounding context
+          const endpointName = this.extractHttpEndpointName(lines, index);
+          const key = `http:${endpointName}:${lineNumber}:${sourcePath}`;
+          
+          if (!seen.has(key)) {
+            seen.add(key);
+            results.push({
+              type: 'http',
+              lineNumber,
+              template: endpointName,
+              codeSnippet: line.trim(),
+              sourcePath
+            });
+          }
+          break; // Only count once per line
+        }
+      }
+    });
+  }
+  
+  /**
+   * Extract meaningful HTTP endpoint name from code context
+   * Looks for URL variables, config keys, or environment variables
+   */
+  private extractHttpEndpointName(lines: string[], currentIndex: number): string {
+    // Look at surrounding lines (10 lines before and the current line)
+    const startIndex = Math.max(0, currentIndex - 10);
+    const contextLines = lines.slice(startIndex, currentIndex + 1);
+    
+    // Patterns to find meaningful names, ordered by priority
+    const namePatterns = [
+      // Environment variable: process.env.SCORES_MS_URL
+      /process\.env\.([A-Z_]+URL[A-Z_]*)/,
+      /process\.env\.([A-Z_]+SERVICE[A-Z_]*)/,
+      /process\.env\.([A-Z_]+API[A-Z_]*)/,
+      /process\.env\.([A-Z_]+ENDPOINT[A-Z_]*)/,
+      /process\.env\.([A-Z][A-Z_]+)/,
+      
+      // URL variable assignment: const scoresMsURL = ...
+      /(?:const|let|var)\s+(\w+(?:URL|Url|url))\s*=/,
+      /(?:const|let|var)\s+(\w+(?:Endpoint|endpoint))\s*=/,
+      /(?:const|let|var)\s+(\w+(?:Service|service))\s*=/,
+      
+      // Config key: getMWareConfig('scores_enrichment')
+      /getMWareConfig\s*\(\s*['"](\w+)['"]/,
+      
+      // URL in object: url: scoresMsURLFinal
+      /url:\s*(\w+(?:URL|Url|url)\w*)/,
+      /url:\s*['"]([^'"]+)['"]/,
+    ];
+    
+    // Search context lines for meaningful names
+    for (const contextLine of contextLines.reverse()) { // Search from closest to furthest
+      for (const pattern of namePatterns) {
+        const match = contextLine.match(pattern);
+        if (match && match[1]) {
+          return match[1];
+        }
+      }
+    }
+    
+    return 'httpClient'; // Default fallback
   }
 
   private analyzeConfigDeps(lines: string[], results: ConfigDependency[]): void {

@@ -452,38 +452,50 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                     return; // Don't process as middleware node
                 }
                 
-                // Check if it's a toggle button node: MW{n}_c{...}_toggle
-                const toggleMatch = nodeId.match(/^(MW\d+(?:_c\d+)+)_toggle$/);
-                if (toggleMatch) {
-                    const compNodeId = toggleMatch[1];
-                    console.log('[FlowAnalyzer] Toggle button node:', nodeId, '-> component:', compNodeId);
-                    
-                    node.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        console.log('[FlowAnalyzer] Toggle clicked for:', compNodeId);
-                        vscode.postMessage({
-                            command: 'toggleComponentExpansion',
-                            nodeId: compNodeId
-                        });
-                    });
-                    return;
-                }
-                
                 // Check if it's a component node: MW{n}_c{...} (e.g., MW1_c0, MW1_c0_c1)
                 const compMatch = nodeId.match(/^(MW\d+(?:_c\d+)+)$/);
                 if (compMatch) {
                     console.log('[FlowAnalyzer] Component node:', nodeId);
                     const compNodeId = compMatch[1];
+                    const nodeLabel = node.querySelector('.nodeLabel')?.textContent || '';
+                    const hasToggle = nodeLabel.includes('▶') || nodeLabel.includes('▼');
+                    const hasExternalCalls = nodeLabel.includes('📡');
                     
-                    // Component nodes always show detail in sidebar (toggle is separate)
                     node.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        console.log('[FlowAnalyzer] Component clicked, showing detail:', compNodeId);
-                        const comp = findComponentByNodeId(compNodeId);
-                        if (comp) {
-                            sidebarHistory = [];
-                            currentSidebarItem = null;
-                            showComponentDetailSidebar(comp, false);
+                        
+                        const rect = node.getBoundingClientRect();
+                        const clickX = e.clientX - rect.left;
+                        const nodeWidth = rect.width;
+                        const clickRatio = clickX / nodeWidth;
+                        
+                        // Determine click zones:
+                        // - Left 20%: toggle (if has toggle)
+                        // - Right 20%: external calls (if has 📡)
+                        // - Middle: detail view
+                        
+                        if (hasToggle && clickRatio < 0.20) {
+                            console.log('[FlowAnalyzer] Toggle clicked for:', compNodeId);
+                            vscode.postMessage({
+                                command: 'toggleComponentExpansion',
+                                nodeId: compNodeId
+                            });
+                        } else if (hasExternalCalls && clickRatio > 0.80) {
+                            console.log('[FlowAnalyzer] External calls clicked for:', compNodeId);
+                            const comp = findComponentByNodeId(compNodeId);
+                            if (comp) {
+                                sidebarHistory = [];
+                                currentSidebarItem = null;
+                                showExternalCallsSidebar(comp);
+                            }
+                        } else {
+                            console.log('[FlowAnalyzer] Component text clicked, showing detail:', compNodeId);
+                            const comp = findComponentByNodeId(compNodeId);
+                            if (comp) {
+                                sidebarHistory = [];
+                                currentSidebarItem = null;
+                                showComponentDetailSidebar(comp, false);
+                            }
                         }
                     });
                     return;
@@ -494,13 +506,29 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                 if (mwMatch) {
                     console.log('[FlowAnalyzer] Middleware node:', nodeId);
                     const mwIndex = parseInt(mwMatch[1]) - 1;
-                    if (currentMiddlewares[mwIndex]) {
+                    const mw = currentMiddlewares[mwIndex];
+                    if (mw) {
+                        const nodeLabel = node.querySelector('.nodeLabel')?.textContent || '';
+                        const hasExternalCalls = nodeLabel.includes('📡');
+                        
                         node.addEventListener('click', (e) => {
                             e.stopPropagation();
-                            console.log('[FlowAnalyzer] Middleware clicked:', nodeId);
-                            // Reset history when clicking from flow diagram
-                            sidebarHistory = [];
-                            showMiddlewareDetailSidebar(currentMiddlewares[mwIndex], false);
+                            
+                            const rect = node.getBoundingClientRect();
+                            const clickX = e.clientX - rect.left;
+                            const nodeWidth = rect.width;
+                            const clickRatio = clickX / nodeWidth;
+                            
+                            if (hasExternalCalls && clickRatio > 0.80) {
+                                console.log('[FlowAnalyzer] External calls clicked for middleware:', nodeId);
+                                sidebarHistory = [];
+                                currentSidebarItem = null;
+                                showMiddlewareExternalCallsSidebar(mw);
+                            } else {
+                                console.log('[FlowAnalyzer] Middleware clicked:', nodeId);
+                                sidebarHistory = [];
+                                showMiddlewareDetailSidebar(mw, false);
+                            }
                         });
                     }
                 }
@@ -1433,6 +1461,171 @@ function renderDataUsageGroup(sourceType, usages, filePath) {
             </div>
         </div>
     `;
+}
+
+// Show external calls list for a component in sidebar
+function showExternalCallsSidebar(component) {
+    // Add current to history before switching
+    if (currentSidebarItem) {
+        sidebarHistory.push(currentSidebarItem);
+    }
+    currentSidebarItem = { type: 'externalCalls', item: component };
+    updateBackButton();
+
+    const sidebar = document.getElementById('detail-sidebar');
+    const content = document.getElementById('sidebar-content');
+    const title = document.getElementById('sidebar-title');
+    
+    title.textContent = `📡 ${component.displayName || component.name} - External Calls`;
+    
+    const externalCalls = component.externalCalls || [];
+    
+    // Group calls by type
+    const callsByType = {};
+    externalCalls.forEach(call => {
+        const type = call.type || 'unknown';
+        if (!callsByType[type]) {
+            callsByType[type] = [];
+        }
+        callsByType[type].push(call);
+    });
+    
+    content.innerHTML = `
+        <!-- Component File -->
+        <div class="sidebar-section">
+            <div class="section-title">📁 Source</div>
+            <div class="section-content">
+                <div class="clickable-item component-file" data-filepath="${component.filePath}" data-line="${component.mainFunctionLine || 1}">
+                    <code>${component.filePath.split(/[/\\]/).slice(-3).join('/')}</code>
+                </div>
+            </div>
+        </div>
+        
+        <!-- External Calls by Type -->
+        ${Object.entries(callsByType).map(([type, calls]) => `
+        <div class="sidebar-section">
+            <div class="section-title collapsible" data-collapsed="false">
+                <span class="collapse-icon">▼</span>
+                ${getCallTypeEmoji(type)} ${type.toUpperCase()} (${calls.length})
+            </div>
+            <div class="section-content collapsible-body">
+                ${calls.map(c => `
+                    <div class="clickable-item ext-call" data-path="${c.sourcePath || component.filePath}" data-line="${c.lineNumber}">
+                        <div class="ext-call-url">${c.template || c.url || 'Unknown URL'}</div>
+                        ${c.method ? `<span class="call-method">${c.method}</span>` : ''}
+                        <span class="line-num">:${c.lineNumber}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+        `).join('') || '<div class="empty-msg">No external calls</div>'}
+    `;
+    
+    setupSidebarEventHandlers(content, component, false);
+    sidebar.classList.add('open');
+}
+
+// Get emoji for external call type
+function getCallTypeEmoji(type) {
+    switch (type?.toLowerCase()) {
+        case 'get': return '📥';
+        case 'post': return '📤';
+        case 'put': return '📝';
+        case 'delete': return '🗑️';
+        case 'patch': return '🔧';
+        case 'axios': return '🌐';
+        case 'fetch': return '🔗';
+        default: return '🌐';
+    }
+}
+
+// Show middleware external calls in sidebar
+function showMiddlewareExternalCallsSidebar(middleware) {
+    // Add current to history before switching
+    if (currentSidebarItem) {
+        sidebarHistory.push(currentSidebarItem);
+    }
+    currentSidebarItem = { type: 'middlewareExternalCalls', item: middleware };
+    updateBackButton();
+
+    const sidebar = document.getElementById('detail-sidebar');
+    const content = document.getElementById('sidebar-content');
+    const title = document.getElementById('sidebar-title');
+    
+    title.textContent = `📡 ${middleware.name} - All External Calls`;
+    
+    // Collect all external calls from middleware and its components
+    const allCalls = [];
+    
+    // Add middleware's own external calls
+    (middleware.externalCalls || []).forEach(call => {
+        allCalls.push({ ...call, source: middleware.name, sourcePath: call.sourcePath || middleware.filePath });
+    });
+    
+    // Add external calls from all components recursively
+    function collectComponentCalls(components, level = 0) {
+        (components || []).forEach(comp => {
+            (comp.externalCalls || []).forEach(call => {
+                allCalls.push({ ...call, source: comp.displayName || comp.name, sourcePath: call.sourcePath || comp.filePath });
+            });
+            if (comp.children) {
+                collectComponentCalls(comp.children, level + 1);
+            }
+        });
+    }
+    collectComponentCalls(middleware.components);
+    
+    // Group calls by source
+    const callsBySource = {};
+    allCalls.forEach(call => {
+        const source = call.source;
+        if (!callsBySource[source]) {
+            callsBySource[source] = [];
+        }
+        callsBySource[source].push(call);
+    });
+    
+    content.innerHTML = `
+        <!-- Middleware File -->
+        <div class="sidebar-section">
+            <div class="section-title">📁 Middleware</div>
+            <div class="section-content">
+                <div class="clickable-item component-file" data-filepath="${middleware.filePath}" data-line="1">
+                    <code>${middleware.filePath.split(/[/\\]/).slice(-3).join('/')}</code>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Summary -->
+        <div class="sidebar-section">
+            <div class="section-title">📊 Summary</div>
+            <div class="section-content">
+                <div class="summary-text">Total: ${allCalls.length} external calls from ${Object.keys(callsBySource).length} sources</div>
+            </div>
+        </div>
+        
+        <!-- External Calls by Source -->
+        ${Object.entries(callsBySource).map(([source, calls]) => `
+        <div class="sidebar-section">
+            <div class="section-title collapsible" data-collapsed="false">
+                <span class="collapse-icon">▼</span>
+                📦 ${source} (${calls.length})
+            </div>
+            <div class="section-content collapsible-body">
+                ${calls.map(c => `
+                    <div class="clickable-item ext-call" data-path="${c.sourcePath}" data-line="${c.lineNumber}">
+                        <span class="call-type">${c.type?.toUpperCase() || 'HTTP'}</span>
+                        <div class="ext-call-url">${c.template || c.url || 'Unknown URL'}</div>
+                        <span class="line-num">:${c.lineNumber}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+        `).join('') || '<div class="empty-msg">No external calls</div>'}
+    `;
+    
+    setupSidebarEventHandlers(content, middleware, true);
+    sidebar.classList.add('open');
 }
 
 // Show component detail in sidebar
