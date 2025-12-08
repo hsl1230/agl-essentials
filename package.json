@@ -2,16 +2,21 @@
   "name": "agl-essentials",
   "displayName": "AGL Essentials",
   "description": "A VS Code extension for AGL development, including Mapper Viewer and Endpoint Viewer.",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "publisher": "henry-huang",
   "engines": {
-    "vscode": "^1.98.0"
+    "vscode": "^1.99.3"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hsl1230/agl-essentials"
+  },
+  "homepage": "https://github.com/hsl1230/agl-essentials#readme",
   "categories": [
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:.custom-middleware-name"
+    "workspaceContains:**/agl-config-*/files/customRoutes.json"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -110,6 +115,11 @@
         "title": "Open Endpoint Viewer"
       },
       {
+        "command": "aglEssentials.analyzeEndpointFlow",
+        "title": "AGL: Analyze Endpoint Flow",
+        "icon": "$(search)"
+      },
+      {
         "command": "aglEssentials.highlightNode",
         "title": "Highlight Node"
       },
@@ -120,6 +130,18 @@
       {
         "command": "aglEssentials.goToUnitTestFile",
         "title": "Go to Unit Test File"
+      }
+    ],
+    "themes": [
+      {
+        "label": "My Dark Theme",
+        "uiTheme": "vs-dark",
+        "path": ".resources/themes/dark-theme.json"
+      },
+      {
+        "label": "My Light Theme",
+        "uiTheme": "vs",
+        "path": ".resources/themes/light-theme.json"
       }
     ],
     "colors": [
@@ -136,9 +158,9 @@
         "id": "aglEssentials.treeHighlightForeground",
         "description": "Foreground color for highlighted tree nodes in AGL Essentials.",
         "defaults": {
-          "light": "#000000",
-          "dark": "#FFFFFF",
-          "highContrast": "#FFFFFF"
+          "light": "#FF0000",
+          "dark": "#FF0000",
+          "highContrast": "#FF0000"
         }
       }
     ],
@@ -147,6 +169,16 @@
         {
           "command": "aglEssentials.highlightNode",
           "when": "viewItem == highlightedNode",
+          "group": "inline"
+        },
+        {
+          "command": "aglEssentials.analyzeEndpointFlow",
+          "when": "viewItem == endpointNode",
+          "group": "navigation"
+        },
+        {
+          "command": "aglEssentials.analyzeEndpointFlow",
+          "when": "viewItem == endpointNode",
           "group": "inline"
         }
       ],
@@ -166,8 +198,8 @@
     "package": "vsce package"
   },
   "devDependencies": {
-    "@types/node": "^16.11.7",
-    "@types/vscode": "^1.98.0",
+    "@types/node": "^20.19.25",
+    "@types/vscode": "^1.99.1",
     "typescript": "^4.9.4"
   }
 }

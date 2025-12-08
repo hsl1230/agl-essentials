@@ -5,12 +5,12 @@ export class ProviderManager {
   private mapperTreeDataProviderMap = new Map<string, MapperTreeDataProvider>();
   private endpointTreeDataProviderMap = new Map<string, EndpointTreeDataProvider>();
 
-  createMapperTreeDataProvider(workspaceFolder: string, middlewareName: string, isDefault: boolean) {
+  createMapperTreeDataProvider(workspaceFolder: string, middlewareName: string) {
     let mapperTreeDataProvider = this.mapperTreeDataProviderMap.get(middlewareName);
     if (mapperTreeDataProvider) {
       return mapperTreeDataProvider;
     }
-    mapperTreeDataProvider = new MapperTreeDataProvider(workspaceFolder, middlewareName, isDefault);
+    mapperTreeDataProvider = new MapperTreeDataProvider(workspaceFolder, middlewareName);
     this.mapperTreeDataProviderMap.set(middlewareName, mapperTreeDataProvider);
     return mapperTreeDataProvider;
   }

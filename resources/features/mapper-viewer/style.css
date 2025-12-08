@@ -27,6 +27,7 @@ body {
     font-weight: bold;
     font-size: 18px;
     color: #333;
+    cursor: pointer;
 }
 
 /* Body styling */

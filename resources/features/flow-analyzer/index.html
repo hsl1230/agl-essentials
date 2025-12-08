@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AGL Flow Analyzer</title>
+    <link rel="stylesheet" href="{{styleUri}}">
+    <!-- Mermaid.js for diagram rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+
+<body>
+    <div class="flow-analyzer-container">
+        <!-- Header -->
+        <div class="flow-header">
+            <h1>🔍 AGL Flow Analyzer</h1>
+            <div class="endpoint-info" id="endpoint-info"></div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tab-container">
+            <button class="tab-btn active" data-tab="flow-diagram">Flow Diagram</button>
+            <button class="tab-btn" data-tab="middleware-list">Middleware Chain</button>
+            <button class="tab-btn" data-tab="component-tree">Component Tree</button>
+            <button class="tab-btn" data-tab="data-flow">Data Flow</button>
+            <button class="tab-btn" data-tab="config-view">Configuration</button>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="tab-content">
+            <!-- Flow Diagram Tab -->
+            <div id="flow-diagram" class="tab-panel active">
+                <div class="diagram-controls">
+                    <button id="refresh-btn" title="Refresh Analysis">🔄 Refresh</button>
+                    <button id="zoom-in-btn">➕ Zoom In</button>
+                    <button id="zoom-out-btn">➖ Zoom Out</button>
+                    <button id="reset-zoom-btn">↺ Reset</button>
+                </div>
+                <div class="diagram-container" id="mermaid-diagram">
+                    <div class="diagram-viewport">
+                        <div class="loading">
+                            <div class="loading-spinner"></div>
+                            <div class="loading-text">Analyzing middleware flow...</div>
+                        </div>
+                    </div>
+                    <div class="zoom-info">100%</div>
+                </div>
+                <div class="diagram-legend">
+                    <span class="legend-item"><span class="legend-color writes"></span> Writes res.locals</span>
+                    <span class="legend-item"><span class="legend-color reads"></span> Reads res.locals</span>
+                    <span class="legend-item"><span class="legend-color both"></span> Reads & Writes</span>
+                    <span class="legend-item"><span class="legend-color external"></span> External Call</span>
+                </div>
+            </div>
+
+            <!-- Middleware List Tab -->
+            <div id="middleware-list" class="tab-panel">
+                <div class="middleware-chain" id="middleware-chain"></div>
+            </div>
+
+            <!-- Component Tree Tab -->
+            <div id="component-tree" class="tab-panel">
+                <div class="component-tree-header">
+                    <h3>Component Hierarchy</h3>
+                    <div class="tree-controls">
+                        <button id="expand-all-btn">Expand All</button>
+                        <button id="collapse-all-btn">Collapse All</button>
+                    </div>
+                </div>
+                <div class="component-tree-container" id="component-tree-container"></div>
+            </div>
+
+            <!-- Data Flow Tab -->
+            <div id="data-flow" class="tab-panel">
+                <div class="data-flow-header">
+                    <h3>res.locals Properties</h3>
+                    <input type="text" id="property-search" placeholder="Search properties...">
+                </div>
+                <div class="property-list" id="property-list"></div>
+            </div>
+
+            <!-- Floating Property Detail Panel -->
+            <div class="property-detail-floating" id="property-detail-floating">
+                <div class="floating-panel-header">
+                    <span class="floating-panel-title" id="floating-panel-title">Property Details</span>
+                    <button class="floating-panel-close" id="floating-panel-close">✕</button>
+                </div>
+                <div class="floating-panel-content" id="floating-panel-content"></div>
+            </div>
+
+            <!-- Config View Tab -->
+            <div id="config-view" class="tab-panel">
+                <div class="config-section" id="config-section"></div>
+            </div>
+        </div>
+
+        <!-- Detail Sidebar -->
+        <div class="detail-sidebar" id="detail-sidebar">
+            <div class="sidebar-header">
+                <button class="back-btn" id="back-btn" title="Back" style="display: none;">←</button>
+                <h3 id="sidebar-title">Detail</h3>
+                <button class="close-btn" id="close-sidebar">✕</button>
+            </div>
+            <div class="sidebar-content" id="sidebar-content"></div>
+        </div>
+    </div>
+
+    <script src="{{scriptUri}}"></script>
+</body>
+
+</html>

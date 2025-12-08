@@ -23,9 +23,19 @@ export abstract class TreeDataProvider implements vscode.TreeDataProvider<Featur
             };
         }
 
-        // Set a custom context value for highlighted nodes
-        treeItem.contextValue = element.isHighlighted ? "highlightedNode" : "normalNode";
+        // Set context value: prioritize element's own contextValue, then check highlight status
+        if (element.contextValue) {
+            treeItem.contextValue = element.contextValue;
+        } else if (element.isHighlighted) {
+            treeItem.contextValue = "highlightedNode";
+        } else {
+            treeItem.contextValue = "normalNode";
+        }
 
+        // Assign a unique resourceUri for highlighted nodes
+        if (element.isHighlighted) {
+            treeItem.resourceUri = vscode.Uri.parse(`aglEssentials-highlighted:${element.name}`);
+        }
         return treeItem;
     }
 
@@ -35,6 +45,24 @@ export abstract class TreeDataProvider implements vscode.TreeDataProvider<Featur
         } else {
             return this.treeData.children;
         }
+    }
+
+    // Add the getParent method
+    getParent(element: FeatureNode): FeatureNode | null {
+        const findParent = (node: FeatureNode, target: FeatureNode): FeatureNode | null => {
+            for (const child of node.children) {
+                if (child === target) {
+                    return node;
+                }
+                const parent = findParent(child, target);
+                if (parent) {
+                    return parent;
+                }
+            }
+            return null;
+        };
+
+        return findParent(this.treeData, element);
     }
 
     fire(node?: FeatureNode) {

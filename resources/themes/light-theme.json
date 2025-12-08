@@ -1,0 +1,8 @@
+{
+  "name": "Light Theme",
+  "type": "light",
+  "colors": {
+    "list.highlightForeground": "#000000",
+    "list.highlightBackground": "#D6EAF8"
+  }
+}

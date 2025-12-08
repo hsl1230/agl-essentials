@@ -1,13 +1,34 @@
 import * as fs from 'fs';
-import * as path from 'path';
 import * as vscode from 'vscode';
+import { activateConfig } from './activate-config';
+import { activateDefaultMappersAndEndpoints } from './activate-default-mappers-endpoints';
 import { activateMiddleware } from './activate-middleware';
-import { activateTemplate } from './activate-template';
+import { HighlightDecorationProvider } from './providers/highlight-decoration-provider';
 import { CommandService } from './services/command-service';
 import { ProviderManager } from './services/provider-manager';
 import { ViewManager } from './services/view-manager';
 
+const CONFIG_PREFIX = 'agl-config-';
+
+function discoverMiddlewares(root: string): string[] {
+  try {
+    return fs
+      .readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(CONFIG_PREFIX))
+      .map((entry) => entry.name.slice(CONFIG_PREFIX.length))
+      .filter((name) => name.length > 0 && name !== 'common');
+  } catch (error) {
+    console.error('Failed to read middleware directories', error);
+    return [];
+  }
+}
+
 export function activate(context: vscode.ExtensionContext) {
+    const highlightDecorationProvider = new HighlightDecorationProvider();
+    context.subscriptions.push(
+        vscode.window.registerFileDecorationProvider(highlightDecorationProvider)
+    );
+
     const viewManager = new ViewManager(context);
     const providerManager = new ProviderManager();
 
@@ -17,26 +38,28 @@ export function activate(context: vscode.ExtensionContext) {
         return;
     }
 
-    const middlewareFilePath = path.join(workspaceFolder, '.custom-middleware-name');
-    let middlewareName = '';
-    try {
-        middlewareName = fs.readFileSync(middlewareFilePath, 'utf8').trim();
-    } catch (error: any) {
-        vscode.window.showErrorMessage(`Failed to read middleware name: ${error.message}`);
+    const middlewareNames = discoverMiddlewares(workspaceFolder);
+    // middlewareNames now contains ['proxy', 'content', ...] for every agl-config-<middleware> dir
+    console.log('Available middlewares:', middlewareNames);
+
+    if (middlewareNames.length === 0) {
+        vscode.window.showWarningMessage('No AGL middleware configurations found in the workspace.');
         return;
     }
-
-    const commandService = new CommandService(workspaceFolder, middlewareName, providerManager, context);
-
-    // Register Mapper Tree
-    const defaultMapperTreeDataProvider = providerManager.createMapperTreeDataProvider(workspaceFolder, middlewareName, true);
-    viewManager.createView(`aglMappers-${middlewareName}`, defaultMapperTreeDataProvider);
-
-    // Register Endpoint Tree
-    const defaultEndpointTreeDataProvider = providerManager.createEndpointTreeDataProvider(workspaceFolder, middlewareName);
-    viewManager.createView(`aglEndpoints-${middlewareName}`, defaultEndpointTreeDataProvider);
     
-    // Register the tree data provider
+    const middlewareOrder = ['page-composition', 'content', 'recording', 'proxy', 'plus', 'stub', 'mediaroom', 'user', 'proxy', 'main', 'safetynet'];
+
+    const sortedMiddlewareNames = middlewareOrder.filter(name => middlewareNames.includes(name));
+
+    let middlewareName = sortedMiddlewareNames[0]
+
+    const commandService = new CommandService(workspaceFolder, providerManager, context);
+
+    activateDefaultMappersAndEndpoints(viewManager, providerManager, workspaceFolder, middlewareName);    
+    activateMiddleware(workspaceFolder, middlewareName);
+    activateConfig('template');
+    activateConfig('nanoConfigKey');
+    activateConfig('panicConfigKey');
 
     // Register commands
     commandService.registerCommands(viewManager, providerManager);
@@ -46,9 +69,6 @@ export function activate(context: vscode.ExtensionContext) {
         providerManager,
         commandService
     );
-
-    activateMiddleware(workspaceFolder, middlewareName);
-    activateTemplate('template');
 }
 
 export function deactivate() { }

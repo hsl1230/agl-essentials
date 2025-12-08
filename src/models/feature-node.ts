@@ -6,4 +6,6 @@ export interface FeatureNode {
   command?: string;
   arguments?: any[];
   isHighlighted?: boolean;
+  contextValue?: string;
+  endpointData?: any;
 }

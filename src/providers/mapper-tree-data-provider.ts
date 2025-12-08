@@ -8,7 +8,7 @@ import { TreeDataProvider } from './tree-data-provider';
 export class MapperTreeDataProvider extends TreeDataProvider {
     private mapperMap: Map<string, MapperConfig> = new Map();
 
-    constructor(private workspaceFolder: string, public readonly middlewareName: string, private isDefaultMiddleware: boolean) {
+    constructor(private workspaceFolder: string, public readonly middlewareName: string) {
         super();
         this.loadData();
     }
@@ -33,10 +33,7 @@ export class MapperTreeDataProvider extends TreeDataProvider {
     }
 
     private buildMapperMap(mapConfigs: any[]) {
-        let fullMiddlewareName = 'agl-custom-middleware';
-        if (!this.isDefaultMiddleware) {
-            fullMiddlewareName = `agl-${this.middlewareName}-middleware`;
-        }
+        let fullMiddlewareName = `agl-${this.middlewareName}-middleware`;
         for (const mapConfig of mapConfigs) {
             let mapConfigFilePath = path.join(this.workspaceFolder, fullMiddlewareName, mapConfig.file);
             if (!mapConfigFilePath.endsWith('.json')) {
@@ -123,7 +120,7 @@ export class MapperTreeDataProvider extends TreeDataProvider {
 
     private async expandParentNodes(treeView: vscode.TreeView<FeatureNode>, targetNode: FeatureNode): Promise<void> {
         try {
-            await treeView.reveal(targetNode, { expand: 3, select: true, focus: true });
+            await treeView.reveal(targetNode, { expand: 3, select: false, focus: false });
         } catch (error: any) {
             console.error(`Failed to expand parent nodes for ${targetNode.name}: ${error.message}`);
         }

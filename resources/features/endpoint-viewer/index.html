@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Endpoint Viewer</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="{{styleUri}}">
     <script>
         (function (global) {
             // JSON Viewer Library
@@ -148,8 +148,13 @@
 </head>
 
 <body>
+    <div class="endpoint-actions">
+        <button id="analyze-flow-btn" class="action-btn" title="Analyze endpoint flow with res.locals tracking">
+            🔍 Analyze Flow
+        </button>
+    </div>
     <div id="jsonContent"></div>
-    <script src="script.js"></script>
+    <script src="{{scriptUri}}"></script>
 </body>
 
 </html>

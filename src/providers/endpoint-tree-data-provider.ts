@@ -28,11 +28,30 @@ export class EndpointTreeDataProvider extends TreeDataProvider {
     private buildEndpointTree(endpoints: any[]) {
         this.treeData = { name: 'Root', children: [] };
         for (const endpoint of endpoints) {
+            const uriParts = endpoint.endpointUri.split('\/:propertyName');
+
+            const match = uriParts[0].match(/:appversion\(([^)]+)\)/);
+            const appVersionValue = match ? match[1] : null;
+
+            let shortUri = uriParts[1];
+
+            if (!shortUri) {
+                shortUri = endpoint.endpointUri.split(/\/:appversion\([^)]+\)/)[1];
+            }
+
+            if (appVersionValue) {
+                shortUri = `/(${appVersionValue})${shortUri}`;
+            } else {
+                shortUri = endpoint.endpointUri;
+            }
+
             const endpointNode: FeatureNode = {
-                name: `${endpoint.method.toUpperCase()} (${endpoint.endpointUri})`,
+                name: `${endpoint.method.toUpperCase()} ${shortUri}`,
                 children: [],
                 command: 'aglEssentials.openEndpointDetails',
-                arguments: [endpoint, this.middlewareName]
+                arguments: [endpoint, this.middlewareName],
+                contextValue: 'endpointNode',
+                endpointData: endpoint
             };
             this.treeData.children.push(endpointNode);
         }
