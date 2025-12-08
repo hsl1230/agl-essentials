@@ -1545,6 +1545,101 @@ body {
     flex-wrap: wrap;
 }
 
+.ext-call-group {
+    margin-bottom: 12px;
+}
+
+.ext-call-group-header {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-blue);
+    padding: 4px 8px;
+    background-color: var(--bg-tertiary);
+    border-radius: 4px;
+    margin-bottom: 4px;
+}
+
+.ext-call-group-items {
+    padding-left: 8px;
+}
+
+.ext-call-group-items .ext-call {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.ext-call-group-items .ext-call:hover {
+    background-color: var(--bg-hover);
+}
+
+.ext-call-group-items .ext-call code {
+    color: var(--accent-green);
+    font-size: 12px;
+}
+
+.ext-call-group-items .source-file {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-left: auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px;
+}
+
+.ext-call-group-items .no-template {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 11px;
+}
+
+/* Bubble indicator for external calls from children */
+.bubble-indicator {
+    font-size: 8px;
+    margin-left: 2px;
+    color: var(--accent-orange);
+    vertical-align: super;
+}
+
+.ext-badge {
+    transition: opacity 0.2s;
+}
+
+.all-calls-badge {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-left: 8px;
+    font-weight: normal;
+}
+
+.show-all-calls-section {
+    margin-top: 12px;
+    border-top: 1px solid var(--border-color);
+    padding-top: 8px;
+}
+
+.show-all-calls-toggle {
+    cursor: pointer;
+    color: var(--accent-blue);
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.show-all-calls-toggle:hover {
+    background-color: var(--bg-hover);
+}
+
+.all-calls-content {
+    margin-top: 8px;
+    padding-left: 8px;
+    border-left: 2px solid var(--border-color);
+}
+
 .ext-call-url {
     font-family: 'Consolas', 'Monaco', monospace;
     font-size: 10px;

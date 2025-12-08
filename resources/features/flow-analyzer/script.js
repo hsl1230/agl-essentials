@@ -721,13 +721,20 @@ function renderComponentTreeItems(components, parentPath, depth = 0) {
         const reads = comp.resLocalsReads || [];
         const writes = comp.resLocalsWrites || [];
         const dataUsages = comp.dataUsages || [];
-        const external = comp.externalCalls || [];
+        const ownExternal = comp.externalCalls || [];
+        
+        // Calculate total external calls including all descendants (for bubble display)
+        const totalExternal = countAllExternalCalls(comp);
+        const childrenExternal = totalExternal - ownExternal.length;
         
         const icon = comp.name?.startsWith('@opus/') ? '🔧' : '📄';
         const hasData = reads.length > 0 || writes.length > 0 || dataUsages.length > 0;
         
+        // Store component data for dynamic updates
+        const compDataAttr = `data-own-ext="${ownExternal.length}" data-total-ext="${totalExternal}"`;
+        
         return `
-            <div class="tree-component" style="margin-left: ${depth * 16}px;">
+            <div class="tree-component" style="margin-left: ${depth * 16}px;" ${compDataAttr}>
                 <div class="tree-comp-header" 
                      data-filepath="${comp.filePath}" 
                      data-line="${comp.mainFunctionLine || 1}">
@@ -738,7 +745,11 @@ function renderComponentTreeItems(components, parentPath, depth = 0) {
                         ${writes.length > 0 ? `<span class="badge write">W:${writes.length}</span>` : ''}
                         ${reads.length > 0 ? `<span class="badge read">R:${reads.length}</span>` : ''}
                         ${dataUsages.length > 0 ? `<span class="badge data">D:${dataUsages.length}</span>` : ''}
-                        ${external.length > 0 ? `<span class="badge ext">E:${external.length}</span>` : ''}
+                        ${totalExternal > 0 ? `
+                            <span class="badge ext ext-badge" data-own="${ownExternal.length}" data-total="${totalExternal}">
+                                E:${totalExternal}${childrenExternal > 0 ? `<span class="bubble-indicator">↑</span>` : ''}
+                            </span>
+                        ` : ''}
                     </div>
                 </div>
                 ${hasChildren ? `
@@ -749,6 +760,19 @@ function renderComponentTreeItems(components, parentPath, depth = 0) {
             </div>
         `;
     }).join('');
+}
+
+/**
+ * Count all external calls in a component and all its descendants
+ */
+function countAllExternalCalls(component) {
+    let count = (component.externalCalls || []).length;
+    if (component.children) {
+        for (const child of component.children) {
+            count += countAllExternalCalls(child);
+        }
+    }
+    return count;
 }
 
 function countAllComponents(components) {
@@ -795,9 +819,14 @@ function setupTreeEventHandlers() {
                 const toggle = e.target;
                 const content = header.nextElementSibling;
                 if (toggle.classList.contains('empty')) return;
+                
+                const isExpanding = !toggle.classList.contains('expanded');
                 toggle.classList.toggle('expanded');
                 toggle.textContent = toggle.classList.contains('expanded') ? '▼' : '▶';
                 content?.classList.toggle('expanded');
+                
+                // Update external call badges based on expand/collapse state
+                updateExternalCallBadges(header.closest('.tree-component'), isExpanding);
                 return;
             }
             // Otherwise find and show component detail - reset history when clicking from tree
@@ -811,6 +840,39 @@ function setupTreeEventHandlers() {
             }
         });
     });
+}
+
+/**
+ * Update external call badges when expanding/collapsing
+ * When collapsed: show total (own + children's) with bubble indicator
+ * When expanded: show only own calls (children show their own)
+ */
+function updateExternalCallBadges(treeComponent, isExpanding) {
+    if (!treeComponent) return;
+    
+    const badge = treeComponent.querySelector(':scope > .tree-comp-header .ext-badge');
+    if (!badge) return;
+    
+    const ownCount = parseInt(badge.dataset.own) || 0;
+    const totalCount = parseInt(badge.dataset.total) || 0;
+    const childrenCount = totalCount - ownCount;
+    
+    if (isExpanding) {
+        // When expanded, show only own calls (children will show their own)
+        if (ownCount > 0) {
+            badge.innerHTML = `E:${ownCount}`;
+            badge.style.display = '';
+        } else {
+            // Hide badge if no own calls (children have their own badges now)
+            badge.style.opacity = '0.5';
+            badge.innerHTML = `E:0`;
+        }
+    } else {
+        // When collapsed, show total with bubble indicator
+        badge.style.display = '';
+        badge.style.opacity = '';
+        badge.innerHTML = `E:${totalCount}${childrenCount > 0 ? '<span class="bubble-indicator">↑</span>' : ''}`;
+    }
 }
 
 function findComponentByPath(filePath) {
@@ -1525,20 +1587,36 @@ function showMiddlewareDetailSidebar(middleware, addToHistory = true) {
             </div>
         </div>
         
-        <!-- External Calls -->
+        <!-- External Calls - show only this middleware's own calls, with option to see all -->
         <div class="sidebar-section">
             <div class="section-title collapsible" data-collapsed="false">
                 <span class="collapse-icon">▼</span>
                 🌐 External Calls (${middleware.externalCalls?.length || 0})
+                ${(middleware.allExternalCalls?.length || 0) > (middleware.externalCalls?.length || 0) ? 
+                    `<span class="all-calls-badge" title="Total calls including components">(${middleware.allExternalCalls.length} total)</span>` : ''}
             </div>
             <div class="section-content collapsible-body">
-                ${(middleware.externalCalls || []).map(c => `
-                    <div class="clickable-item ext-call" data-path="${middleware.filePath}" data-line="${c.lineNumber}">
-                        <span class="call-type">${c.type.toUpperCase()}</span>
-                        ${c.template ? `<code>${c.template}</code>` : ''}
-                        <span class="line-num">:${c.lineNumber}</span>
+                ${(middleware.externalCalls?.length || 0) > 0 ? 
+                    renderExternalCallsGrouped(middleware.externalCalls, middleware.filePath) :
+                    '<div class="empty-msg">No direct external calls in this middleware</div>'
+                }
+                ${(middleware.allExternalCalls?.length || 0) > (middleware.externalCalls?.length || 0) ? `
+                    <div class="show-all-calls-section">
+                        <div class="show-all-calls-toggle" onclick="toggleAllExternalCalls(this)">
+                            ▶ Show all calls from components (${middleware.allExternalCalls.length - (middleware.externalCalls?.length || 0)} more)
+                        </div>
+                        <div class="all-calls-content" style="display: none;">
+                            ${renderExternalCallsGrouped(
+                                middleware.allExternalCalls.filter(c => 
+                                    !middleware.externalCalls?.some(mc => 
+                                        mc.type === c.type && mc.template === c.template && mc.sourcePath === c.sourcePath
+                                    )
+                                ), 
+                                middleware.filePath
+                            )}
+                        </div>
                     </div>
-                `).join('') || '<div class="empty-msg">None</div>'}
+                ` : ''}
             </div>
         </div>
         
@@ -1597,6 +1675,85 @@ function renderSidebarComponentTree(components, depth) {
             </div>
         `;
     }).join('');
+}
+
+/**
+ * Render external calls grouped by type, with source file info
+ * Groups calls by type (AVS, DCQ, etc.) and shows which file they come from
+ */
+function renderExternalCallsGrouped(calls, defaultFilePath) {
+    if (!calls || calls.length === 0) {
+        return '<div class="empty-msg">None</div>';
+    }
+    
+    // Group calls by type
+    const callsByType = {};
+    calls.forEach(call => {
+        const type = (call.type || 'unknown').toUpperCase();
+        if (!callsByType[type]) {
+            callsByType[type] = [];
+        }
+        callsByType[type].push(call);
+    });
+    
+    // Sort types alphabetically
+    const sortedTypes = Object.keys(callsByType).sort();
+    
+    return sortedTypes.map(type => {
+        const typeCalls = callsByType[type];
+        const typeIcon = getExternalCallIcon(type);
+        
+        return `
+            <div class="ext-call-group">
+                <div class="ext-call-group-header">
+                    ${typeIcon} ${type} (${typeCalls.length})
+                </div>
+                <div class="ext-call-group-items">
+                    ${typeCalls.map(c => {
+                        const sourceFile = c.sourcePath ? c.sourcePath.split(/[/\\]/).slice(-2).join('/') : '';
+                        return `
+                            <div class="clickable-item ext-call" data-path="${c.sourcePath || defaultFilePath}" data-line="${c.lineNumber}">
+                                ${c.template ? `<code>${c.template}</code>` : '<span class="no-template">(no name)</span>'}
+                                ${sourceFile ? `<span class="source-file" title="${c.sourcePath}">${sourceFile}</span>` : ''}
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function getExternalCallIcon(type) {
+    const icons = {
+        'AVS': '🔗',
+        'DCQ': '📊',
+        'ELASTICSEARCH': '🔍',
+        'PINBOARD': '📌',
+        'HTTP': '🌐',
+        'EXTERNAL': '🔌',
+        'MICROSERVICE': '⚡',
+        'DSF': '📡',
+        'AVA': '🎬'
+    };
+    return icons[type] || '📡';
+}
+
+/**
+ * Toggle visibility of all external calls from components section
+ */
+function toggleAllExternalCalls(toggleElement) {
+    const section = toggleElement.closest('.show-all-calls-section');
+    const content = section.querySelector('.all-calls-content');
+    const isExpanded = content.style.display !== 'none';
+    
+    if (isExpanded) {
+        content.style.display = 'none';
+        toggleElement.textContent = toggleElement.textContent.replace('▼', '▶');
+    } else {
+        content.style.display = 'block';
+        toggleElement.textContent = toggleElement.textContent.replace('▶', '▼');
+    }
 }
 
 function renderDataUsageGroup(sourceType, usages, filePath) {

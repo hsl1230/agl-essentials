@@ -37,6 +37,7 @@ export interface DataUsage {
   codeSnippet: string;
   fullPath?: string;  // e.g., "seedData.containers" for nested properties
   sourcePath?: string; // Source file path where this usage occurs
+  isLibrary?: boolean; // Whether this usage is in a library file (agl-core, agl-utils, etc.)
 }
 
 // Keep ResLocalsUsage for backward compatibility
