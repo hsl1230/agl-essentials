@@ -239,11 +239,23 @@ export class FlowAnalyzer {
     const visibleComponentMap = new Map<string, string>();
 
     // Build external calls map: sourceFilePath -> external calls
+    // Use a seen set to prevent duplicates when same component is referenced by multiple middlewares
     const allExternalCallsMap = new Map<string, { call: any, extIdx: number }[]>();
+    const seenCalls = new Set<string>(); // Track calls globally to prevent cross-middleware duplicates
+    
     result.middlewares.forEach((mw, mwIndex) => {
       mw.allExternalCalls.forEach((call, extIdx) => {
         const sourcePath = call.sourcePath || mw.filePath;
         if (sourcePath) {
+          // Create a unique key for this call: type + template + lineNumber + sourcePath
+          const callKey = `${call.type || ''}:${call.template || ''}:${call.lineNumber || 0}:${sourcePath}`;
+          
+          // Skip if we've already seen this exact call
+          if (seenCalls.has(callKey)) {
+            return;
+          }
+          seenCalls.add(callKey);
+          
           if (!allExternalCallsMap.has(sourcePath)) {
             allExternalCallsMap.set(sourcePath, []);
           }
@@ -305,31 +317,35 @@ export class FlowAnalyzer {
       mwFilePath: string,
       mwId: string,
       prefix: string,
-      parentPath: string
+      lastVisiblePath: string // Track the last VISIBLE ancestor, not just expanded
     ): string | null => {
       for (let idx = 0; idx < components.length; idx++) {
         const comp = components[idx];
         const compId = prefix ? `${prefix}_c${idx}` : `${mwId}_c${idx}`;
+        
+        // Update lastVisiblePath if this component is visible
+        const currentVisiblePath = (comp.filePath && visibleFilePaths.has(comp.filePath)) 
+          ? comp.filePath 
+          : lastVisiblePath;
         
         if (comp.filePath === targetPath) {
           // Found the target component
           if (visibleFilePaths.has(targetPath)) {
             return targetPath; // Component is visible, return it
           } else {
-            return parentPath; // Component is not visible, return parent
+            return currentVisiblePath; // Component is not visible, return last visible ancestor
           }
         }
         
         // Check children
         if (comp.children.length > 0) {
-          const isExpanded = expandedNodes.has(compId);
           const childResult = findDeepestVisibleAncestor(
             comp.children,
             targetPath,
             mwFilePath,
             mwId,
             compId,
-            isExpanded && comp.filePath ? comp.filePath : parentPath
+            currentVisiblePath // Pass the last visible path
           );
           if (childResult) return childResult;
         }
