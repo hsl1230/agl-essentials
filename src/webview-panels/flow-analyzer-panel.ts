@@ -69,10 +69,13 @@ export class FlowAnalyzerPanel extends AbstractPanel {
 
     // Generate Mermaid diagram with current expansion state
     this.log('Generating Mermaid diagram...');
-    const mermaidDiagram = this.flowAnalyzer.generateMermaidDiagram(this.currentResult, this.expandedNodes);
+    const { diagram: mermaidDiagram, externalCallsMap } = this.flowAnalyzer.generateMermaidDiagram(this.currentResult, this.expandedNodes);
     const dataFlowSummary = this.flowAnalyzer.generateDataFlowSummary(this.currentResult);
     const componentTree = this.flowAnalyzer.generateComponentTree(this.currentResult.middlewares);
     this.log('Mermaid diagram generated');
+
+    // Convert externalCallsMap to array for JSON serialization
+    const externalCallsMapArray = Array.from(externalCallsMap.entries());
 
     // Send to webview
     this.log('Sending results to webview...');
@@ -87,6 +90,7 @@ export class FlowAnalyzerPanel extends AbstractPanel {
         componentTree,
         componentDataFlow: this.currentResult.componentDataFlow,
         expandedNodes: Array.from(this.expandedNodes),  // Send expansion state to webview
+        externalCallsMap: externalCallsMapArray,  // Send extId -> call mapping for click navigation
         allProperties: Array.from(this.currentResult.allResLocalsProperties.entries()).map(([key, value]) => ({
           property: key,
           ...value
@@ -106,13 +110,17 @@ export class FlowAnalyzerPanel extends AbstractPanel {
   private regenerateDiagram(): void {
     if (!this.currentResult) return;
     
-    const mermaidDiagram = this.flowAnalyzer.generateMermaidDiagram(this.currentResult, this.expandedNodes);
+    const { diagram: mermaidDiagram, externalCallsMap } = this.flowAnalyzer.generateMermaidDiagram(this.currentResult, this.expandedNodes);
+    
+    // Convert externalCallsMap to array for JSON serialization
+    const externalCallsMapArray = Array.from(externalCallsMap.entries());
     
     this.panel?.webview.postMessage({
       command: 'diagramUpdate',
       content: {
         mermaidDiagram,
-        expandedNodes: Array.from(this.expandedNodes)
+        expandedNodes: Array.from(this.expandedNodes),
+        externalCallsMap: externalCallsMapArray
       }
     });
   }

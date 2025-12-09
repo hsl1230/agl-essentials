@@ -223,8 +223,12 @@ export class FlowAnalyzer {
    * Generate Mermaid diagram from analysis result
    * @param result - The flow analysis result
    * @param expandedNodes - Set of node IDs that should show their children (e.g., "MW1_c0", "MW2_c1")
+   * @returns Object containing diagram string and externalCallsMap for click navigation
    */
-  public generateMermaidDiagram(result: FlowAnalysisResult, expandedNodes: Set<string> = new Set()): string {
+  public generateMermaidDiagram(result: FlowAnalysisResult, expandedNodes: Set<string> = new Set()): { diagram: string, externalCallsMap: Map<string, any> } {
+    // Map to store extId -> call data for click navigation
+    const externalCallsMap = new Map<string, any>();
+    
     let diagram = 'flowchart TD\n';
     diagram += '    classDef default fill:#2d2d2d,stroke:#555,color:#fff\n';
     diagram += '    classDef hasWrites fill:#1a472a,stroke:#2d5a3d,color:#90EE90\n';
@@ -484,13 +488,13 @@ export class FlowAnalyzer {
         
         // Add external call nodes as rounded rectangles inside the subgraph
         if (mwExternalCalls && mwExternalCalls.length > 0) {
-          diagram = this.addExternalCallNodes(diagram, mwExternalCalls, `${mwId}_main`, '        ');
+          diagram = this.addExternalCallNodes(diagram, mwExternalCalls, `${mwId}_main`, '        ', externalCallsMap);
         }
         
         // Add component nodes with expansion support and collect visible components
         diagram = this.addComponentNodesWithExpansion(
           diagram, mw.components, mwId, `${mwId}_main`, 
-          expandedNodes, '', 0, visibleComponentMap, effectiveExternalCallsMap
+          expandedNodes, '', 0, visibleComponentMap, effectiveExternalCallsMap, externalCallsMap
         );
         
         diagram += `    end\n`;
@@ -501,7 +505,7 @@ export class FlowAnalyzer {
         
         // Add external call nodes as rounded rectangles (only middleware's own calls when collapsed)
         if (mwExternalCalls && mwExternalCalls.length > 0) {
-          diagram = this.addExternalCallNodes(diagram, mwExternalCalls, `${mwId}_main`, '        ');
+          diagram = this.addExternalCallNodes(diagram, mwExternalCalls, `${mwId}_main`, '        ', externalCallsMap);
         }
         
         diagram += `    end\n`;
@@ -511,7 +515,7 @@ export class FlowAnalyzer {
         
         // Add external call nodes as rounded rectangles
         if (mwExternalCalls && mwExternalCalls.length > 0) {
-          diagram = this.addExternalCallNodes(diagram, mwExternalCalls, mwId, '    ');
+          diagram = this.addExternalCallNodes(diagram, mwExternalCalls, mwId, '    ', externalCallsMap);
         }
       }
     });
@@ -555,7 +559,7 @@ export class FlowAnalyzer {
       }
     });
 
-    return diagram;
+    return { diagram, externalCallsMap };
   }
 
   /**
@@ -572,7 +576,8 @@ export class FlowAnalyzer {
     prefix: string = '',
     depth: number = 0,
     visibleComponentMap?: Map<string, string>,
-    externalCallsMap?: Map<string, { call: any, extIdx: number }[]>
+    externalCallsMap?: Map<string, { call: any, extIdx: number }[]>,
+    extIdToCallMap?: Map<string, any>
   ): string {
     components.forEach((comp, idx) => {
       const compId = prefix ? `${prefix}_c${idx}` : `${mwId}_c${idx}`;
@@ -622,7 +627,7 @@ export class FlowAnalyzer {
         
         // Add external call nodes as rounded rectangles inside subgraph
         if (compExternalCalls && compExternalCalls.length > 0) {
-          diagram = this.addExternalCallNodes(diagram, compExternalCalls, compId, indent + '    ');
+          diagram = this.addExternalCallNodes(diagram, compExternalCalls, compId, indent + '    ', extIdToCallMap);
         }
         
         // Add children inside the subgraph
@@ -635,7 +640,8 @@ export class FlowAnalyzer {
           compId,
           depth + 1,
           visibleComponentMap,
-          externalCallsMap
+          externalCallsMap,
+          extIdToCallMap
         );
         
         diagram += `${indent}end\n`;
@@ -648,7 +654,7 @@ export class FlowAnalyzer {
         
         // Add external call nodes as rounded rectangles
         if (compExternalCalls && compExternalCalls.length > 0) {
-          diagram = this.addExternalCallNodes(diagram, compExternalCalls, compId, indent);
+          diagram = this.addExternalCallNodes(diagram, compExternalCalls, compId, indent, extIdToCallMap);
         }
       }
     });
@@ -658,12 +664,14 @@ export class FlowAnalyzer {
   
   /**
    * Add external call nodes as rounded rectangles connected to a parent node
+   * Also populates extIdToCallMap for click navigation
    */
   private addExternalCallNodes(
     diagram: string, 
     externalCalls: { call: any, extIdx: number }[], 
     parentId: string, 
-    indent: string
+    indent: string,
+    extIdToCallMap?: Map<string, any>
   ): string {
     externalCalls.forEach((ext, idx) => {
       const call = ext.call;
@@ -676,6 +684,18 @@ export class FlowAnalyzer {
       // If no template name found, skip this call (it's not meaningful to display)
       if (!callName) {
         return;
+      }
+      
+      // Store the call data in the map for click navigation
+      if (extIdToCallMap) {
+        extIdToCallMap.set(extId, {
+          type: call.type,
+          template: call.template,
+          sourcePath: call.sourcePath,
+          lineNumber: call.lineNumber,
+          codeSnippet: call.codeSnippet,
+          isLibrary: call.isLibrary
+        });
       }
       
       // Shorten long names - take the last meaningful part

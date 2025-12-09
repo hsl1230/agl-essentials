@@ -5,6 +5,7 @@ let currentEndpoint = null;
 let currentMiddlewares = [];
 let currentProperties = [];
 let zoomLevel = 1;
+let currentExternalCallsMap = new Map(); // extId -> call data for click navigation
 
 // Pan/Zoom state for diagram
 let panState = {
@@ -314,6 +315,11 @@ window.addEventListener('message', event => {
             // Handle diagram-only update (for expand/collapse) - preserve pan/zoom
             console.log('[FlowAnalyzer WebView] Handling diagramUpdate...');
             try {
+                // Update externalCallsMap for click navigation
+                if (message.content.externalCallsMap) {
+                    currentExternalCallsMap = new Map(message.content.externalCallsMap);
+                    console.log('[FlowAnalyzer WebView] Updated externalCallsMap with', currentExternalCallsMap.size, 'entries');
+                }
                 renderMermaidDiagram(message.content.mermaidDiagram, true);
             } catch (error) {
                 console.error('[FlowAnalyzer WebView] Error handling diagramUpdate:', error);
@@ -343,12 +349,19 @@ async function handleAnalysisResult(data) {
         hasEndpoint: !!data.endpoint,
         middlewaresCount: data.middlewares?.length,
         propertiesCount: data.allProperties?.length,
-        hasDiagram: !!data.mermaidDiagram
+        hasDiagram: !!data.mermaidDiagram,
+        hasExternalCallsMap: !!data.externalCallsMap
     });
     
     currentEndpoint = data.endpoint;
     currentMiddlewares = data.middlewares;
     currentProperties = data.allProperties;
+    
+    // Update externalCallsMap for click navigation
+    if (data.externalCallsMap) {
+        currentExternalCallsMap = new Map(data.externalCallsMap);
+        console.log('[FlowAnalyzer WebView] Loaded externalCallsMap with', currentExternalCallsMap.size, 'entries');
+    }
     
     try {
         console.log('[FlowAnalyzer WebView] Rendering endpoint info...');
@@ -570,8 +583,16 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
     }
 }
 
-// Find external call by parent node ID and index
+// Find external call by node ID (extId format: MW1_main_ext0, MW1_c0_ext1, etc.)
 function findExternalCallByNodeId(parentNodeId, extIndex) {
+    // First, try to find from the currentExternalCallsMap (includes bubbled calls)
+    const extId = `${parentNodeId}_ext${extIndex}`;
+    if (currentExternalCallsMap && currentExternalCallsMap.has(extId)) {
+        console.log('[FlowAnalyzer] Found external call in map:', extId);
+        return currentExternalCallsMap.get(extId);
+    }
+    
+    // Fallback: try to find from component's own externalCalls (legacy behavior)
     if (!currentMiddlewares) return null;
     
     // Parse the parent node ID to find the middleware and component
