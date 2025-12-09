@@ -42,7 +42,6 @@ export class EndpointPanel extends AbstractPanel {
           this.panel?.webview.postMessage({ command: 'error', message: `Failed to open the middleware ${message.middlewarePath}: ${error.message}` });
         }
       } else if (message.command === 'openMapperViewer') {
-        console.log('Open mapper viewer', message.mapperName);
         this.featureViewerManager.openFeatureViewer('mapper-viewer', message.mapperName, this.middlewareName);
         vscode.commands.executeCommand('aglEssentials.highlightNode', message.mapperName, this.middlewareName);
       } else if (message.command === 'analyzeFlow') {

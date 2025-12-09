@@ -1,142 +1,132 @@
 import * as fs from 'fs';
-import path from 'path';
 import * as vscode from 'vscode';
+import { deriveTestFilePath } from '../shared';
 import { FeatureViewerManager } from './feature-viewer-manager';
 import { ProviderManager } from './provider-manager';
 import { ViewManager } from './view-manager';
 
-export class CommandService {
+export class CommandService implements vscode.Disposable {
     private featureViewerManager: FeatureViewerManager;
-
     private disposables: vscode.Disposable[] = [];
 
-    constructor(private workspaceFolder: string, providerManager: ProviderManager, context: vscode.ExtensionContext) {
+    constructor(
+        private workspaceFolder: string, 
+        providerManager: ProviderManager, 
+        context: vscode.ExtensionContext
+    ) {
         this.featureViewerManager = new FeatureViewerManager(workspaceFolder, context, providerManager);
     }
 
     registerCommands(viewManager: ViewManager, providerManager: ProviderManager) {
         this.disposables.push(
-            vscode.commands.registerCommand('aglEssentials.loadMiddleware', (middlewareName) => {
-                if (viewManager.exists(`aglMappers-${middlewareName}`)) {
-                    vscode.window.showInformationMessage(`${middlewareName} Mappers is already loaded.`);
-                    return;
-                }
-                // Register Mapper Tree
+            this.registerLoadMiddlewareCommand(viewManager, providerManager),
+            this.registerOpenMapperViewerCommand(),
+            this.registerOpenMWareConfigCommand(),
+            this.registerOpenCustomPanicConfigCommand(),
+            this.registerOpenEndpointDetailsCommand(),
+            this.registerAnalyzeEndpointFlowCommand(),
+            this.registerHighlightNodeCommand(viewManager, providerManager),
+            this.registerGoToUnitTestFileCommand()
+        );
+    }
+
+    private registerLoadMiddlewareCommand(viewManager: ViewManager, providerManager: ProviderManager): vscode.Disposable {
+        return vscode.commands.registerCommand('aglEssentials.loadMiddleware', (middlewareName) => {
+            // Register Mapper Tree if not exists
+            if (!viewManager.exists(`aglMappers-${middlewareName}`)) {
                 const mapperTreeDataProvider = providerManager.createMapperTreeDataProvider(this.workspaceFolder, middlewareName);
                 viewManager.createView(`aglMappers-${middlewareName}`, mapperTreeDataProvider);
+            }
 
-                if (viewManager.exists(`aglEndpoints-${middlewareName}`)) {
-                    vscode.window.showInformationMessage(`${middlewareName} Endpoints is already loaded.`);
-                    return;
-                }
-                // Register Endpoint Tree
+            // Register Endpoint Tree if not exists
+            if (!viewManager.exists(`aglEndpoints-${middlewareName}`)) {
                 const endpointTreeDataProvider = providerManager.createEndpointTreeDataProvider(this.workspaceFolder, middlewareName);
                 viewManager.createView(`aglEndpoints-${middlewareName}`, endpointTreeDataProvider);
-            }),
-            vscode.commands.registerCommand('aglEssentials.openMapperViewer', (mapperName, middlewareName) => {
-                this.featureViewerManager.openFeatureViewer('mapper-viewer', mapperName, middlewareName);
-            }),
-            vscode.commands.registerCommand('aglEssentials.openMWareConfig', (configName, middlewareName) => {
-                this.featureViewerManager.openFeatureViewer('mware-config', configName, middlewareName);
-            }),
-            vscode.commands.registerCommand('aglEssentials.openCustomPanicConfig', (configName, middlewareName) => {
-                this.featureViewerManager.openFeatureViewer('custom-panic-config', configName, middlewareName);
-            }),
-            vscode.commands.registerCommand('aglEssentials.openEndpointDetails', (endpoint, middlewareName) => {
-                this.featureViewerManager.openFeatureViewer('endpoint-viewer', endpoint, middlewareName);
-            }),
-            vscode.commands.registerCommand('aglEssentials.analyzeEndpointFlow', (arg1, arg2) => {
-                // Support two calling patterns:
-                // 1. From context menu: arg1 = FeatureNode with endpointData and arguments[1] = middlewareName
-                // 2. From webview/direct: arg1 = endpoint, arg2 = middlewareName
-                let endpoint: any;
-                let middlewareName: string;
-                
-                if (arg1 && arg1.endpointData) {
-                    // Called from context menu - arg1 is FeatureNode
-                    endpoint = arg1.endpointData;
-                    middlewareName = arg1.arguments?.[1] || arg2;
-                } else {
-                    // Called directly with endpoint object
-                    endpoint = arg1;
-                    middlewareName = arg2;
-                }
-                
-                if (!endpoint || !middlewareName) {
-                    vscode.window.showErrorMessage('Missing endpoint or middleware information');
-                    return;
-                }
-                
-                this.featureViewerManager.openFeatureViewer('flow-analyzer', endpoint, middlewareName);
-            }),
-            vscode.commands.registerCommand('aglEssentials.highlightNode', (mapperName: string, middlewareName) => {
-                const mapperTreeDataProvider = providerManager.getMapperTreeDataProvider(middlewareName);
-                mapperTreeDataProvider?.highlightTreeNodes(mapperName, viewManager.getView(`aglMappers-${middlewareName}`));
-            }),
-            vscode.commands.registerCommand('aglEssentials.goToUnitTestFile', async (uri: vscode.Uri) => {
-                console.log('#### uri:', uri);
-                if (!uri) {
-                    vscode.window.showErrorMessage('No file selected.');
-                    return;
-                }
+            }
+        });
+    }
 
-                // Get the current file path
-                const currentFilePath = uri.fsPath;
+    private registerOpenMapperViewerCommand(): vscode.Disposable {
+        return vscode.commands.registerCommand('aglEssentials.openMapperViewer', (mapperName, middlewareName) => {
+            this.featureViewerManager.openFeatureViewer('mapper-viewer', mapperName, middlewareName);
+        });
+    }
 
-                // Derive the unit test file path
-                const testFilePath = deriveTestFilePath(currentFilePath);
-                console.log('#### testFilePath:', testFilePath);
-                if (!testFilePath) {
-                    vscode.window.showErrorMessage('Failed to derive test file path.');
-                    return;
-                }
+    private registerOpenMWareConfigCommand(): vscode.Disposable {
+        return vscode.commands.registerCommand('aglEssentials.openMWareConfig', (configName, middlewareName) => {
+            this.featureViewerManager.openFeatureViewer('mware-config', configName, middlewareName);
+        });
+    }
 
-                // Check if the test file exists
-                if (fs.existsSync(testFilePath)) {
-                    // Open the test file in the editor
-                    const fileUri = vscode.Uri.file(testFilePath);
-                    await vscode.commands.executeCommand('vscode.open', fileUri);
-                } else {
-                    vscode.window.showErrorMessage(`Test file not found: ${testFilePath}`);
-                }
-            })
-        );
+    private registerOpenCustomPanicConfigCommand(): vscode.Disposable {
+        return vscode.commands.registerCommand('aglEssentials.openCustomPanicConfig', (configName, middlewareName) => {
+            this.featureViewerManager.openFeatureViewer('custom-panic-config', configName, middlewareName);
+        });
+    }
+
+    private registerOpenEndpointDetailsCommand(): vscode.Disposable {
+        return vscode.commands.registerCommand('aglEssentials.openEndpointDetails', (endpoint, middlewareName) => {
+            this.featureViewerManager.openFeatureViewer('endpoint-viewer', endpoint, middlewareName);
+        });
+    }
+
+    private registerAnalyzeEndpointFlowCommand(): vscode.Disposable {
+        return vscode.commands.registerCommand('aglEssentials.analyzeEndpointFlow', (arg1, arg2) => {
+            // Support two calling patterns:
+            // 1. From context menu: arg1 = FeatureNode with endpointData
+            // 2. From webview/direct: arg1 = endpoint, arg2 = middlewareName
+            let endpoint: any;
+            let middlewareName: string;
+            
+            if (arg1?.endpointData) {
+                // Called from context menu - arg1 is FeatureNode
+                endpoint = arg1.endpointData;
+                middlewareName = arg1.arguments?.[1] || arg2;
+            } else {
+                // Called directly with endpoint object
+                endpoint = arg1;
+                middlewareName = arg2;
+            }
+            
+            if (!endpoint || !middlewareName) {
+                vscode.window.showErrorMessage('Missing endpoint or middleware information');
+                return;
+            }
+            
+            this.featureViewerManager.openFeatureViewer('flow-analyzer', endpoint, middlewareName);
+        });
+    }
+
+    private registerHighlightNodeCommand(viewManager: ViewManager, providerManager: ProviderManager): vscode.Disposable {
+        return vscode.commands.registerCommand('aglEssentials.highlightNode', (mapperName: string, middlewareName: string) => {
+            const mapperTreeDataProvider = providerManager.getMapperTreeDataProvider(middlewareName);
+            mapperTreeDataProvider?.highlightTreeNodes(mapperName, viewManager.getView(`aglMappers-${middlewareName}`));
+        });
+    }
+
+    private registerGoToUnitTestFileCommand(): vscode.Disposable {
+        return vscode.commands.registerCommand('aglEssentials.goToUnitTestFile', async (uri: vscode.Uri) => {
+            if (!uri) {
+                vscode.window.showErrorMessage('No file selected.');
+                return;
+            }
+
+            const testFilePath = deriveTestFilePath(uri.fsPath);
+            if (!testFilePath) {
+                vscode.window.showErrorMessage('Failed to derive test file path.');
+                return;
+            }
+
+            if (fs.existsSync(testFilePath)) {
+                await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(testFilePath));
+            } else {
+                vscode.window.showErrorMessage(`Test file not found: ${testFilePath}`);
+            }
+        });
     }
 
     dispose() {
         this.disposables.forEach(d => d.dispose());
         this.disposables = [];
     }
-}
-
-// Helper function to derive the unit test file path
-function deriveTestFilePath(filePath: string): string {
-    const dirName = path.dirname(filePath);
-    const baseName = path.basename(filePath, '.js'); // Remove ".js" extension
-    let testDir = '';
-
-    const aglApps = ['proxy', 'content', 'main', 'mediaroom', 'page-composition', 'user', 'plus', 'safetynet', 'recording', 'stub'];
-    const aglLibs = ['agl-core', 'agl-logger', 'agl-utils', 'agl-gulp', 'agl-cache'];
-    aglApps.forEach(app => {
-        if (dirName.includes(`\/agl-${app}-middleware\/`)) {
-            testDir = dirName.replace(`\/agl-${app}-middleware\/`, `\/agl-${app}-middleware\/test\/`);
-        } else if (dirName.includes(`\\agl-${app}-middleware\\`)) {
-            testDir = dirName.replace(`\\agl-${app}-middleware\\`, `\\agl-${app}-middleware\\test\\`);
-        }
-    });
-
-    aglLibs.forEach(lib => {
-        if (dirName.includes(`\/${lib}\/`)) {
-            testDir = dirName.replace(`\/${lib}\/`, `\/${lib}\/test\/`);
-        } else if (dirName.includes(`\\${lib}\\`)) {
-            testDir = dirName.replace(`\\${lib}\\`, `\\${lib}\\test\\`);
-        }
-    });
-
-    if (!testDir) {
-        return '';
-    }
-
-    // Append ".test.js" to the file name
-    return path.join(testDir, `${baseName}.test.js`);
 }

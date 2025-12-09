@@ -19,7 +19,6 @@ export class ViewManager implements vscode.Disposable {
         if (!this.activeViews.has(viewId)) {
             vscode.commands.executeCommand('setContext', `${viewId}-view-visible`, true);
 
-            console.log('#### creating view:', viewId, provider.getChildren());
             const treeView = vscode.window.createTreeView(viewId, {
                 treeDataProvider: provider
             });

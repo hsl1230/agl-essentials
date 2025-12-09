@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { CONFIG_PREFIX } from '../shared/constants';
 import { AbstractPanel } from './abstract-panel';
 
 export class JsonConfigPanel extends AbstractPanel {
@@ -28,7 +29,7 @@ export class JsonConfigPanel extends AbstractPanel {
       return this.configMap.get(configKey);
     }
 
-    const filePath = path.join(this.workspaceFolder, `agl-config-${this.middlewareName}/files/${this.configFileName}.json`);
+    const filePath = path.join(this.workspaceFolder, `${CONFIG_PREFIX}${this.middlewareName}/files/${this.configFileName}.json`);
     try {
       const config = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
       this.configMap.set(configKey, config);
@@ -46,7 +47,7 @@ export class JsonConfigPanel extends AbstractPanel {
       return;
     }
 
-    const filePath = `agl-config-${this.middlewareName}/files/${this.configFileName}.json`;
+    const filePath = `${CONFIG_PREFIX}${this.middlewareName}/files/${this.configFileName}.json`;
 
     this.panel?.reveal(vscode.ViewColumn.One);
     const fileContent = JSON.stringify(config[configName]);

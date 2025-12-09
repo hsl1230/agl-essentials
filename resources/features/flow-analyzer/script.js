@@ -1,11 +1,11 @@
 const vscode = acquireVsCodeApi();
-console.log('[FlowAnalyzer WebView] Script loaded, vscode API acquired');
 
 // State
 let currentEndpoint = null;
 let currentMiddlewares = [];
 let currentProperties = [];
 let zoomLevel = 1;
+let currentExternalCallsMap = new Map(); // extId -> call data for click navigation
 
 // Pan/Zoom state for diagram
 let panState = {
@@ -37,7 +37,6 @@ let currentSidebarItem = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('[FlowAnalyzer WebView] DOMContentLoaded - initializing...');
     initializeMermaid();
     initializeTabs();
     initializeControls();
@@ -45,7 +44,6 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeFloatingPanel();
     
     // Request data from extension
-    console.log('[FlowAnalyzer WebView] Sending webviewLoaded message...');
     vscode.postMessage({ command: 'webviewLoaded' });
 });
 
@@ -301,22 +299,22 @@ function openFile(filePath, lineNumber, isMiddleware = false, middlewarePath = n
 // Message handling
 window.addEventListener('message', event => {
     const message = event.data;
-    console.log('[FlowAnalyzer WebView] Received message:', message.command);
     
     switch (message.command) {
         case 'analysisResult':
-            console.log('[FlowAnalyzer WebView] Handling analysisResult...');
             try {
                 handleAnalysisResult(message.content);
-                console.log('[FlowAnalyzer WebView] analysisResult handled successfully');
             } catch (error) {
                 console.error('[FlowAnalyzer WebView] Error handling analysisResult:', error);
             }
             break;
         case 'diagramUpdate':
             // Handle diagram-only update (for expand/collapse) - preserve pan/zoom
-            console.log('[FlowAnalyzer WebView] Handling diagramUpdate...');
             try {
+                // Update externalCallsMap for click navigation
+                if (message.content.externalCallsMap) {
+                    currentExternalCallsMap = new Map(message.content.externalCallsMap);
+                }
                 renderMermaidDiagram(message.content.mermaidDiagram, true);
             } catch (error) {
                 console.error('[FlowAnalyzer WebView] Error handling diagramUpdate:', error);
@@ -342,32 +340,22 @@ window.addEventListener('message', event => {
 
 // Handle analysis result
 async function handleAnalysisResult(data) {
-    console.log('[FlowAnalyzer WebView] handleAnalysisResult called with data:', {
-        hasEndpoint: !!data.endpoint,
-        middlewaresCount: data.middlewares?.length,
-        propertiesCount: data.allProperties?.length,
-        hasDiagram: !!data.mermaidDiagram
-    });
-    
     currentEndpoint = data.endpoint;
     currentMiddlewares = data.middlewares;
     currentProperties = data.allProperties;
     
+    // Update externalCallsMap for click navigation
+    if (data.externalCallsMap) {
+        currentExternalCallsMap = new Map(data.externalCallsMap);
+    }
+    
     try {
-        console.log('[FlowAnalyzer WebView] Rendering endpoint info...');
         renderEndpointInfo(data.endpoint);
-        console.log('[FlowAnalyzer WebView] Rendering mermaid diagram...');
         await renderMermaidDiagram(data.mermaidDiagram);
-        console.log('[FlowAnalyzer WebView] Mermaid diagram rendered!');
-        console.log('[FlowAnalyzer WebView] Rendering middleware chain...');
         renderMiddlewareChain(data.middlewares);
-        console.log('[FlowAnalyzer WebView] Rendering component tree...');
         renderComponentTree(data.middlewares);
-        console.log('[FlowAnalyzer WebView] Rendering data flow...');
         renderDataFlow(data.allProperties, data.middlewares, data.allReqTransactionProperties);
-        console.log('[FlowAnalyzer WebView] Rendering config view...');
         renderConfigView(data.endpoint, data.middlewares);
-        console.log('[FlowAnalyzer WebView] All rendering complete!');
     } catch (error) {
         console.error('[FlowAnalyzer WebView] Error in handleAnalysisResult:', error);
     }
@@ -431,15 +419,14 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
         }
         
         // Add click handlers to nodes - use a more robust selector
-        setTimeout(() => {
+        // Use requestAnimationFrame for faster response instead of setTimeout
+        requestAnimationFrame(() => {
             const nodes = viewport.querySelectorAll('.node');
-            console.log('[FlowAnalyzer] Found nodes:', nodes.length);
             nodes.forEach((node) => {
                 node.style.cursor = 'pointer';
                 
                 // Extract node info from id - Mermaid adds "flowchart-" prefix
                 let nodeId = node.id;
-                console.log('[FlowAnalyzer] Raw node ID:', nodeId);
                 
                 // Strip Mermaid prefix if present (e.g., "flowchart-MW1-0" -> "MW1")
                 if (nodeId.startsWith('flowchart-')) {
@@ -450,13 +437,11 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                     // Convert dashes back to underscores for component IDs
                     nodeId = nodeId.replace(/-/g, '_');
                 }
-                console.log('[FlowAnalyzer] Parsed node ID:', nodeId);
                 
                 // Check if it's an external call node: 
                 // Formats: MW{n}_ext{m}, MW{n}_main_ext{m}, MW{n}_c{x}_ext{m}, MW{n}_c{x}_c{y}_ext{m}
                 const extMatch = nodeId.match(/^(MW\d+(?:_main|(?:_c\d+)*)?)_ext(\d+)$/);
                 if (extMatch) {
-                    console.log('[FlowAnalyzer] External call node:', nodeId, 'parentId:', extMatch[1], 'extIdx:', extMatch[2]);
                     const parentNodeId = extMatch[1];
                     const extIndex = parseInt(extMatch[2]);
                     
@@ -465,7 +450,6 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                     if (extCall) {
                         node.addEventListener('click', (e) => {
                             e.stopPropagation();
-                            console.log('[FlowAnalyzer] External call clicked:', extCall);
                             navigateToExternalCall(null, extCall);
                         });
                     }
@@ -475,7 +459,6 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                 // Check if it's a component node: MW{n}_c{...} (e.g., MW1_c0, MW1_c0_c1)
                 const compMatch = nodeId.match(/^(MW\d+(?:_c\d+)+)$/);
                 if (compMatch) {
-                    console.log('[FlowAnalyzer] Component node:', nodeId);
                     const compNodeId = compMatch[1];
                     const nodeLabel = node.querySelector('.nodeLabel')?.textContent || '';
                     const hasToggle = nodeLabel.includes('▶') || nodeLabel.includes('▼');
@@ -495,13 +478,11 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                         // - Middle: detail view
                         
                         if (hasToggle && clickRatio < 0.20) {
-                            console.log('[FlowAnalyzer] Toggle clicked for:', compNodeId);
                             vscode.postMessage({
                                 command: 'toggleComponentExpansion',
                                 nodeId: compNodeId
                             });
                         } else if (hasExternalCalls && clickRatio > 0.80) {
-                            console.log('[FlowAnalyzer] External calls clicked for:', compNodeId);
                             const comp = findComponentByNodeId(compNodeId);
                             if (comp) {
                                 sidebarHistory = [];
@@ -509,7 +490,6 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                                 showExternalCallsSidebar(comp);
                             }
                         } else {
-                            console.log('[FlowAnalyzer] Component text clicked, showing detail:', compNodeId);
                             const comp = findComponentByNodeId(compNodeId);
                             if (comp) {
                                 sidebarHistory = [];
@@ -524,7 +504,6 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                 // Check if it's a middleware node: MW{n} or MW{n}_main
                 const mwMatch = nodeId.match(/^MW(\d+)(?:_main)?$/);
                 if (mwMatch) {
-                    console.log('[FlowAnalyzer] Middleware node:', nodeId);
                     const mwIndex = parseInt(mwMatch[1]) - 1;
                     const mwId = `MW${mwMatch[1]}`;
                     const mw = currentMiddlewares[mwIndex];
@@ -548,18 +527,15 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                             // - Middle: detail view
                             
                             if ((hasToggle || hasComponents) && clickRatio < 0.20) {
-                                console.log('[FlowAnalyzer] Toggle clicked for middleware:', mwId);
                                 vscode.postMessage({
                                     command: 'toggleMiddlewareExpansion',
                                     nodeId: mwId
                                 });
                             } else if (hasExternalCalls && clickRatio > 0.80) {
-                                console.log('[FlowAnalyzer] External calls clicked for middleware:', nodeId);
                                 sidebarHistory = [];
                                 currentSidebarItem = null;
                                 showMiddlewareExternalCallsSidebar(mw);
                             } else {
-                                console.log('[FlowAnalyzer] Middleware clicked:', nodeId);
                                 sidebarHistory = [];
                                 showMiddlewareDetailSidebar(mw, false);
                             }
@@ -567,14 +543,21 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                     }
                 }
             });
-        }, 200);
+        });
     } catch (error) {
         viewport.innerHTML = `<div class="error">Failed to render diagram: ${error.message}</div>`;
     }
 }
 
-// Find external call by parent node ID and index
+// Find external call by node ID (extId format: MW1_main_ext0, MW1_c0_ext1, etc.)
 function findExternalCallByNodeId(parentNodeId, extIndex) {
+    // First, try to find from the currentExternalCallsMap (includes bubbled calls)
+    const extId = `${parentNodeId}_ext${extIndex}`;
+    if (currentExternalCallsMap && currentExternalCallsMap.has(extId)) {
+        return currentExternalCallsMap.get(extId);
+    }
+    
+    // Fallback: try to find from component's own externalCalls (legacy behavior)
     if (!currentMiddlewares) return null;
     
     // Parse the parent node ID to find the middleware and component
@@ -720,6 +703,8 @@ function renderComponentTreeItems(components, parentPath, depth = 0) {
         const hasChildren = comp.children && comp.children.length > 0;
         const reads = comp.resLocalsReads || [];
         const writes = comp.resLocalsWrites || [];
+        const transReads = comp.reqTransactionReads || [];
+        const transWrites = comp.reqTransactionWrites || [];
         const dataUsages = comp.dataUsages || [];
         const ownExternal = comp.externalCalls || [];
         
@@ -728,7 +713,7 @@ function renderComponentTreeItems(components, parentPath, depth = 0) {
         const childrenExternal = totalExternal - ownExternal.length;
         
         const icon = comp.name?.startsWith('@opus/') ? '🔧' : '📄';
-        const hasData = reads.length > 0 || writes.length > 0 || dataUsages.length > 0;
+        const hasData = reads.length > 0 || writes.length > 0 || transReads.length > 0 || transWrites.length > 0 || dataUsages.length > 0;
         
         // Store component data for dynamic updates
         const compDataAttr = `data-own-ext="${ownExternal.length}" data-total-ext="${totalExternal}"`;
@@ -744,6 +729,8 @@ function renderComponentTreeItems(components, parentPath, depth = 0) {
                     <div class="tree-comp-badges">
                         ${writes.length > 0 ? `<span class="badge write">W:${writes.length}</span>` : ''}
                         ${reads.length > 0 ? `<span class="badge read">R:${reads.length}</span>` : ''}
+                        ${transWrites.length > 0 ? `<span class="badge trans-write">TW:${transWrites.length}</span>` : ''}
+                        ${transReads.length > 0 ? `<span class="badge trans-read">TR:${transReads.length}</span>` : ''}
                         ${dataUsages.length > 0 ? `<span class="badge data">D:${dataUsages.length}</span>` : ''}
                         ${totalExternal > 0 ? `
                             <span class="badge ext ext-badge" data-own="${ownExternal.length}" data-total="${totalExternal}">
@@ -941,24 +928,38 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
     
     // First, process res.locals - count actual usages from middlewares and components
     // Separate app vs library counts
-    const resLocalsCountMap = new Map(); // property -> { appWriteCount, appReadCount, libWriteCount, libReadCount }
+    // Use a Map to track unique source files per property
+    const resLocalsCountMap = new Map(); // property -> { appWriteSources: Set, appReadSources: Set, libWriteSources: Set, libReadSources: Set }
+    const seenResLocalsComponents = new Set(); // Track visited components to prevent duplicate counting
     
     const countResLocalsFromSource = (source) => {
+        // Skip if we've already processed this component
+        if (seenResLocalsComponents.has(source.filePath)) {
+            return;
+        }
+        seenResLocalsComponents.add(source.filePath);
+        
         (source.resLocalsWrites || []).forEach(w => {
-            const entry = resLocalsCountMap.get(w.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
+            const entry = resLocalsCountMap.get(w.property) || { 
+                appWriteSources: new Set(), appReadSources: new Set(), 
+                libWriteSources: new Set(), libReadSources: new Set() 
+            };
             if (w.isLibrary) {
-                entry.libWriteCount++;
+                entry.libWriteSources.add(w.sourcePath || source.filePath);
             } else {
-                entry.appWriteCount++;
+                entry.appWriteSources.add(w.sourcePath || source.filePath);
             }
             resLocalsCountMap.set(w.property, entry);
         });
         (source.resLocalsReads || []).forEach(r => {
-            const entry = resLocalsCountMap.get(r.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
+            const entry = resLocalsCountMap.get(r.property) || { 
+                appWriteSources: new Set(), appReadSources: new Set(), 
+                libWriteSources: new Set(), libReadSources: new Set() 
+            };
             if (r.isLibrary) {
-                entry.libReadCount++;
+                entry.libReadSources.add(r.sourcePath || source.filePath);
             } else {
-                entry.appReadCount++;
+                entry.appReadSources.add(r.sourcePath || source.filePath);
             }
             resLocalsCountMap.set(r.property, entry);
         });
@@ -978,47 +979,68 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
     
     // Build res.locals entries from properties list - separate app and library
     (properties || []).forEach(prop => {
-        const counts = resLocalsCountMap.get(prop.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
-        const hasAppUsage = counts.appWriteCount > 0 || counts.appReadCount > 0;
-        const hasLibUsage = counts.libWriteCount > 0 || counts.libReadCount > 0;
+        const counts = resLocalsCountMap.get(prop.property) || { 
+            appWriteSources: new Set(), appReadSources: new Set(), 
+            libWriteSources: new Set(), libReadSources: new Set() 
+        };
+        const appWriteCount = counts.appWriteSources.size;
+        const appReadCount = counts.appReadSources.size;
+        const libWriteCount = counts.libWriteSources.size;
+        const libReadCount = counts.libReadSources.size;
+        const hasAppUsage = appWriteCount > 0 || appReadCount > 0;
+        const hasLibUsage = libWriteCount > 0 || libReadCount > 0;
         
         if (hasAppUsage) {
             dataGroups['res.locals'].app.push({
                 property: prop.property,
-                writeCount: counts.appWriteCount,
-                readCount: counts.appReadCount
+                writeCount: appWriteCount,
+                readCount: appReadCount
             });
         }
         if (hasLibUsage && !hasAppUsage) {
             // Only show in library section if no app usage
             dataGroups['res.locals'].lib.push({
                 property: prop.property,
-                writeCount: counts.libWriteCount,
-                readCount: counts.libReadCount,
+                writeCount: libWriteCount,
+                readCount: libReadCount,
                 isLibrary: true
             });
         }
     });
     
     // Process req.transaction - count actual usages from middlewares and components
-    const reqTransactionCountMap = new Map(); // property -> { appWriteCount, appReadCount, libWriteCount, libReadCount }
+    // Use a Map to track unique source files per property
+    const reqTransactionCountMap = new Map(); // property -> { appWriteSources: Set, appReadSources: Set, libWriteSources: Set, libReadSources: Set }
+    const seenReqTransactionComponents = new Set(); // Track visited components to prevent duplicate counting
     
     const countReqTransactionFromSource = (source) => {
+        // Skip if we've already processed this component
+        if (seenReqTransactionComponents.has(source.filePath)) {
+            return;
+        }
+        seenReqTransactionComponents.add(source.filePath);
+        
         (source.reqTransactionWrites || []).forEach(w => {
-            const entry = reqTransactionCountMap.get(w.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
+            const entry = reqTransactionCountMap.get(w.property) || { 
+                appWriteSources: new Set(), appReadSources: new Set(), 
+                libWriteSources: new Set(), libReadSources: new Set() 
+            };
             if (w.isLibrary) {
-                entry.libWriteCount++;
+                entry.libWriteSources.add(w.sourcePath || source.filePath);
             } else {
-                entry.appWriteCount++;
+                entry.appWriteSources.add(w.sourcePath || source.filePath);
             }
             reqTransactionCountMap.set(w.property, entry);
         });
         (source.reqTransactionReads || []).forEach(r => {
-            const entry = reqTransactionCountMap.get(r.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
+            const entry = reqTransactionCountMap.get(r.property) || { 
+                appWriteSources: new Set(), appReadSources: new Set(), 
+                libWriteSources: new Set(), libReadSources: new Set() 
+            };
             if (r.isLibrary) {
-                entry.libReadCount++;
+                entry.libReadSources.add(r.sourcePath || source.filePath);
             } else {
-                entry.appReadCount++;
+                entry.appReadSources.add(r.sourcePath || source.filePath);
             }
             reqTransactionCountMap.set(r.property, entry);
         });
@@ -1038,28 +1060,42 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
     
     // Build req.transaction entries from properties list - separate app and library
     (reqTransactionProperties || []).forEach(prop => {
-        const counts = reqTransactionCountMap.get(prop.property) || { appWriteCount: 0, appReadCount: 0, libWriteCount: 0, libReadCount: 0 };
-        const hasAppUsage = counts.appWriteCount > 0 || counts.appReadCount > 0;
-        const hasLibUsage = counts.libWriteCount > 0 || counts.libReadCount > 0;
+        const counts = reqTransactionCountMap.get(prop.property) || { 
+            appWriteSources: new Set(), appReadSources: new Set(), 
+            libWriteSources: new Set(), libReadSources: new Set() 
+        };
+        const appWriteCount = counts.appWriteSources.size;
+        const appReadCount = counts.appReadSources.size;
+        const libWriteCount = counts.libWriteSources.size;
+        const libReadCount = counts.libReadSources.size;
+        const hasAppUsage = appWriteCount > 0 || appReadCount > 0;
+        const hasLibUsage = libWriteCount > 0 || libReadCount > 0;
         
         if (hasAppUsage) {
             dataGroups['req.transaction'].app.push({
                 property: prop.property,
-                writeCount: counts.appWriteCount,
-                readCount: counts.appReadCount
+                writeCount: appWriteCount,
+                readCount: appReadCount
             });
         }
         if (hasLibUsage && !hasAppUsage) {
             dataGroups['req.transaction'].lib.push({
                 property: prop.property,
-                writeCount: counts.libWriteCount,
-                readCount: counts.libReadCount,
+                writeCount: libWriteCount,
+                readCount: libReadCount,
                 isLibrary: true
             });
         }
     });
     
     // Collect other data usages from middlewares
+    // Use a global seen set to prevent duplicates when same component is shared across middlewares
+    const seenDataUsages = new Set(); // Track by property + sourcePath + type to prevent duplicates
+    
+    // Track unique source files per property for counting
+    // Key: sourceType:property:type:isLibrary, Value: Set of sourcePaths
+    const propertySourceFiles = new Map();
+    
     middlewares.forEach(mw => {
         const collectUsagesFromSource = (source) => {
             const usages = source.dataUsages || [];
@@ -1067,21 +1103,19 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
                 // Skip res.locals as it's already handled above
                 if (usage.sourceType === 'res.locals') return;
                 
-                if (dataGroups[usage.sourceType]) {
-                    const targetGroup = usage.isLibrary ? 'lib' : 'app';
-                    const existing = dataGroups[usage.sourceType][targetGroup].find(u => u.property === usage.property);
-                    if (!existing) {
-                        dataGroups[usage.sourceType][targetGroup].push({
-                            property: usage.property,
-                            writeCount: usage.type === 'write' ? 1 : 0,
-                            readCount: usage.type === 'read' ? 1 : 0,
-                            isLibrary: usage.isLibrary
-                        });
-                    } else {
-                        if (usage.type === 'write') existing.writeCount++;
-                        if (usage.type === 'read') existing.readCount++;
-                    }
+                // Create a unique key for this usage to prevent cross-middleware duplicates
+                const usageKey = `${usage.sourceType}:${usage.property}:${usage.type}:${usage.sourcePath || 'unknown'}`;
+                if (seenDataUsages.has(usageKey)) {
+                    return; // Skip duplicate
                 }
+                seenDataUsages.add(usageKey);
+                
+                // Track unique source files for this property
+                const propKey = `${usage.sourceType}:${usage.property}:${usage.type}:${usage.isLibrary ? 'lib' : 'app'}`;
+                if (!propertySourceFiles.has(propKey)) {
+                    propertySourceFiles.set(propKey, new Set());
+                }
+                propertySourceFiles.get(propKey).add(usage.sourcePath || 'unknown');
             });
         };
         
@@ -1094,6 +1128,28 @@ function renderDataFlow(properties, middlewares, reqTransactionProperties) {
         
         collectUsagesFromSource(mw);
         collectFromComponents(mw.components);
+    });
+    
+    // Build dataGroups from propertySourceFiles - count by unique source files, not total usages
+    propertySourceFiles.forEach((sourcePaths, propKey) => {
+        const [sourceType, property, type, group] = propKey.split(':');
+        if (!dataGroups[sourceType]) return;
+        
+        const targetGroup = group === 'lib' ? 'lib' : 'app';
+        const existing = dataGroups[sourceType][targetGroup].find(u => u.property === property);
+        const count = sourcePaths.size; // Count unique source files
+        
+        if (!existing) {
+            dataGroups[sourceType][targetGroup].push({
+                property: property,
+                writeCount: type === 'write' ? count : 0,
+                readCount: type === 'read' ? count : 0,
+                isLibrary: group === 'lib'
+            });
+        } else {
+            if (type === 'write') existing.writeCount = count;
+            if (type === 'read') existing.readCount = count;
+        }
     });
     
     // Render each group - app properties first, then library properties at bottom
@@ -1192,14 +1248,30 @@ function getDataSourceIcon(sourceType) {
 
 function showDataUsageDetail(sourceType, property, event) {
     const usages = [];
+    const seenKeys = new Set(); // Prevent duplicates from multi-referenced components
+    const seenFilePaths = new Set(); // Track visited file paths to prevent duplicate component traversal
     
     const collectUsages = (source, sourceName, isComponent = false) => {
+        // Skip if we've already processed this component
+        if (isComponent && seenFilePaths.has(source.filePath)) {
+            return;
+        }
+        if (isComponent) {
+            seenFilePaths.add(source.filePath);
+        }
+        
         const dataUsages = source.dataUsages || [];
         dataUsages.filter(d => d.sourceType === sourceType && d.property === property).forEach(d => {
+            // Create a unique key to prevent duplicates
+            const key = `${source.filePath}:${d.lineNumber}:${d.type}`;
+            if (seenKeys.has(key)) return;
+            seenKeys.add(key);
+            
             usages.push({
                 source: sourceName,
                 filePath: source.filePath,
                 isComponent,
+                isLibrary: d.isLibrary,
                 type: d.type,
                 lineNumber: d.lineNumber,
                 codeSnippet: d.codeSnippet
@@ -1241,7 +1313,7 @@ function filterProperties(query) {
     });
 }
 
-// Show property usages in floating panel
+// Show property usages in floating panel - grouped by source file, collapsed by default
 function showPropertyUsages(data, sourceType = 'res.locals') {
     const panel = document.getElementById('property-detail-floating');
     const titleEl = document.getElementById('floating-panel-title');
@@ -1256,35 +1328,126 @@ function showPropertyUsages(data, sourceType = 'res.locals') {
     titleEl.textContent = `${sourceLabel}.${data.property}`;
     
     const usages = data.usages || [];
-    const writeCount = usages.filter(u => u.type === 'write').length;
-    const readCount = usages.filter(u => u.type === 'read').length;
+    
+    // Count unique source files for writes and reads (not total usages)
+    const writeFiles = new Set(usages.filter(u => u.type === 'write').map(u => u.filePath || u.source));
+    const readFiles = new Set(usages.filter(u => u.type === 'read').map(u => u.filePath || u.source));
+    const writeCount = writeFiles.size;
+    const readCount = readFiles.size;
     
     if (usages.length === 0) {
         contentEl.innerHTML = `<div class="floating-no-usage">No usages found</div>`;
         return;
     }
     
+    // Group usages by source file
+    const groupedByFile = {};
+    usages.forEach(usage => {
+        const fileKey = usage.filePath || usage.source || 'unknown';
+        if (!groupedByFile[fileKey]) {
+            groupedByFile[fileKey] = {
+                filePath: usage.filePath,
+                source: usage.source,
+                isComponent: usage.isComponent,
+                isLibrary: usage.isLibrary,
+                usages: []
+            };
+        }
+        groupedByFile[fileKey].usages.push(usage);
+    });
+    
+    // Separate app and library groups
+    const appGroups = [];
+    const libGroups = [];
+    Object.values(groupedByFile).forEach(group => {
+        if (group.isLibrary) {
+            libGroups.push(group);
+        } else {
+            appGroups.push(group);
+        }
+    });
+    
+    // Render grouped usages
+    const renderGroup = (group, index, isLibrary = false) => {
+        const displayName = group.source || getFileDisplayName(group.filePath);
+        const writes = group.usages.filter(u => u.type === 'write');
+        const reads = group.usages.filter(u => u.type === 'read');
+        const groupId = `usage-group-${index}`;
+        const libClass = isLibrary ? 'library-group' : '';
+        
+        return `
+            <div class="usage-file-group ${libClass}">
+                <div class="usage-file-header" data-group="${groupId}">
+                    <span class="group-toggle">▶</span>
+                    <span class="group-file-name" title="${group.filePath || ''}">${displayName}</span>
+                    <span class="group-counts">
+                        ${writes.length > 0 ? `<span class="write-count">📤${writes.length}</span>` : ''}
+                        ${reads.length > 0 ? `<span class="read-count">📥${reads.length}</span>` : ''}
+                    </span>
+                </div>
+                <div class="usage-file-content" id="${groupId}" style="display: none;">
+                    ${group.usages.map(usage => `
+                        <div class="floating-usage-item" 
+                             data-filepath="${usage.filePath || ''}" 
+                             data-middleware="${usage.source || usage.middleware}" 
+                             data-line="${usage.lineNumber}"
+                             data-iscomponent="${usage.isComponent || false}">
+                            <span class="usage-type ${usage.type}">${usage.type}</span>
+                            <span class="usage-line">:${usage.lineNumber}</span>
+                            <span class="usage-snippet" title="${escapeHtml(usage.codeSnippet || '')}">${truncate(usage.codeSnippet || '', 40)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    };
+    
+    // Build HTML with app groups first, then library groups
+    let groupsHtml = appGroups.map((g, i) => renderGroup(g, i, false)).join('');
+    
+    if (libGroups.length > 0) {
+        groupsHtml += `
+            <div class="library-section-header">
+                <span class="separator-line"></span>
+                <span class="separator-label">📚 Library (${libGroups.length} files)</span>
+                <span class="separator-line"></span>
+            </div>
+        `;
+        groupsHtml += libGroups.map((g, i) => renderGroup(g, appGroups.length + i, true)).join('');
+    }
+    
     contentEl.innerHTML = `
         <div class="floating-usage-summary">
-            <span class="producer-count">📤 ${writeCount} Write(s)</span>
+            <span class="producer-count">📤 ${writeCount} Source(s)</span>
             <span class="arrow">→</span>
-            <span class="consumer-count">📥 ${readCount} Read(s)</span>
+            <span class="consumer-count">📥 ${readCount} Source(s)</span>
         </div>
-        <div class="floating-usage-list">
-            ${usages.map(usage => `
-                <div class="floating-usage-item" 
-                     data-filepath="${usage.filePath || ''}" 
-                     data-middleware="${usage.source || usage.middleware}" 
-                     data-line="${usage.lineNumber}"
-                     data-iscomponent="${usage.isComponent || false}">
-                    <span class="usage-type ${usage.type}">${usage.type}</span>
-                    <span class="usage-source" title="${usage.source || usage.middleware}">${usage.source || usage.middleware}</span>
-                    <span class="usage-line">:${usage.lineNumber}</span>
-                </div>
-            `).join('')}
+        <div class="floating-usage-groups">
+            ${groupsHtml}
         </div>
     `;
     
+    // Add click handlers for group toggles
+    contentEl.querySelectorAll('.usage-file-header').forEach(header => {
+        header.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const groupId = header.dataset.group;
+            const content = document.getElementById(groupId);
+            const toggle = header.querySelector('.group-toggle');
+            
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                toggle.textContent = '▼';
+                header.classList.add('expanded');
+            } else {
+                content.style.display = 'none';
+                toggle.textContent = '▶';
+                header.classList.remove('expanded');
+            }
+        });
+    });
+    
+    // Add click handlers for usage items
     contentEl.querySelectorAll('.floating-usage-item').forEach(item => {
         item.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1299,6 +1462,27 @@ function showPropertyUsages(data, sourceType = 'res.locals') {
             }
         });
     });
+}
+
+// Helper function to get display name from file path
+function getFileDisplayName(filePath) {
+    if (!filePath) return 'unknown';
+    const parts = filePath.replace(/\\/g, '/').split('/');
+    return parts[parts.length - 1] || filePath;
+}
+
+// Helper function to escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Helper function to truncate text
+function truncate(text, maxLength) {
+    if (!text) return '';
+    if (text.length <= maxLength) return text;
+    return text.substring(0, maxLength) + '...';
 }
 
 // Initialize floating panel with close button and drag support

@@ -2,7 +2,7 @@
   "name": "agl-essentials",
   "displayName": "AGL Essentials",
   "description": "A VS Code extension for AGL development, including Mapper Viewer and Endpoint Viewer.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "henry-huang",
   "engines": {
     "vscode": "^1.99.3"

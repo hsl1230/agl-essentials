@@ -69,10 +69,13 @@ export class FlowAnalyzerPanel extends AbstractPanel {
 
     // Generate Mermaid diagram with current expansion state
     this.log('Generating Mermaid diagram...');
-    const mermaidDiagram = this.flowAnalyzer.generateMermaidDiagram(this.currentResult, this.expandedNodes);
+    const { diagram: mermaidDiagram, externalCallsMap } = this.flowAnalyzer.generateMermaidDiagram(this.currentResult, this.expandedNodes);
     const dataFlowSummary = this.flowAnalyzer.generateDataFlowSummary(this.currentResult);
     const componentTree = this.flowAnalyzer.generateComponentTree(this.currentResult.middlewares);
     this.log('Mermaid diagram generated');
+
+    // Convert externalCallsMap to array for JSON serialization
+    const externalCallsMapArray = Array.from(externalCallsMap.entries());
 
     // Send to webview
     this.log('Sending results to webview...');
@@ -87,6 +90,7 @@ export class FlowAnalyzerPanel extends AbstractPanel {
         componentTree,
         componentDataFlow: this.currentResult.componentDataFlow,
         expandedNodes: Array.from(this.expandedNodes),  // Send expansion state to webview
+        externalCallsMap: externalCallsMapArray,  // Send extId -> call mapping for click navigation
         allProperties: Array.from(this.currentResult.allResLocalsProperties.entries()).map(([key, value]) => ({
           property: key,
           ...value
@@ -106,13 +110,17 @@ export class FlowAnalyzerPanel extends AbstractPanel {
   private regenerateDiagram(): void {
     if (!this.currentResult) return;
     
-    const mermaidDiagram = this.flowAnalyzer.generateMermaidDiagram(this.currentResult, this.expandedNodes);
+    const { diagram: mermaidDiagram, externalCallsMap } = this.flowAnalyzer.generateMermaidDiagram(this.currentResult, this.expandedNodes);
+    
+    // Convert externalCallsMap to array for JSON serialization
+    const externalCallsMapArray = Array.from(externalCallsMap.entries());
     
     this.panel?.webview.postMessage({
       command: 'diagramUpdate',
       content: {
         mermaidDiagram,
-        expandedNodes: Array.from(this.expandedNodes)
+        expandedNodes: Array.from(this.expandedNodes),
+        externalCallsMap: externalCallsMapArray
       }
     });
   }
@@ -149,25 +157,27 @@ export class FlowAnalyzerPanel extends AbstractPanel {
   /**
    * Serialize components recursively
    */
-  private serializeComponents(components: any[]): any[] {
-    return components.map(comp => ({
-      name: comp.name,
-      displayName: comp.displayName,
-      filePath: comp.filePath,
-      exists: comp.exists,
-      depth: comp.depth,
-      parentPath: comp.parentPath,
-      resLocalsReads: comp.resLocalsReads,
-      resLocalsWrites: comp.resLocalsWrites,
-      reqTransactionReads: comp.reqTransactionReads,
-      reqTransactionWrites: comp.reqTransactionWrites,
-      dataUsages: comp.dataUsages || [],
-      externalCalls: comp.externalCalls,
-      configDeps: comp.configDeps,
-      exportedFunctions: comp.exportedFunctions,
-      mainFunctionLine: comp.mainFunctionLine,
-      children: this.serializeComponents(comp.children)
-    }));
+  private serializeComponents(components: any[], depth: number = 0): any[] {
+    return components.map(comp => {
+      return {
+        name: comp.name,
+        displayName: comp.displayName,
+        filePath: comp.filePath,
+        exists: comp.exists,
+        depth: comp.depth,
+        parentPath: comp.parentPath,
+        resLocalsReads: comp.resLocalsReads,
+        resLocalsWrites: comp.resLocalsWrites,
+        reqTransactionReads: comp.reqTransactionReads,
+        reqTransactionWrites: comp.reqTransactionWrites,
+        dataUsages: comp.dataUsages || [],
+        externalCalls: comp.externalCalls,
+        configDeps: comp.configDeps,
+        exportedFunctions: comp.exportedFunctions,
+        mainFunctionLine: comp.mainFunctionLine,
+        children: this.serializeComponents(comp.children, depth + 1)
+      };
+    });
   }
 
   protected getMessageHandler(featureArg: any): (msg: any) => void {
@@ -353,47 +363,11 @@ export class FlowAnalyzerPanel extends AbstractPanel {
     const info = this.currentResult.allResLocalsProperties.get(property);
     if (!info) return;
 
-    // Find all usages across middlewares and their components
-    const usages: any[] = [];
-    
-    const collectUsages = (source: any, sourceName: string, isComponent: boolean) => {
-      const writes = source.resLocalsWrites?.filter((w: any) => w.property === property) || [];
-      const reads = source.resLocalsReads?.filter((r: any) => r.property === property) || [];
-
-      writes.forEach((w: any) => {
-        usages.push({
-          source: sourceName,
-          filePath: source.filePath,
-          isComponent,
-          type: 'write',
-          lineNumber: w.lineNumber,
-          codeSnippet: w.codeSnippet
-        });
-      });
-
-      reads.forEach((r: any) => {
-        usages.push({
-          source: sourceName,
-          filePath: source.filePath,
-          isComponent,
-          type: 'read',
-          lineNumber: r.lineNumber,
-          codeSnippet: r.codeSnippet
-        });
-      });
-    };
-
-    const collectFromComponents = (components: any[], parentName: string) => {
-      for (const comp of components) {
-        collectUsages(comp, `${parentName} → ${comp.displayName}`, true);
-        collectFromComponents(comp.children, `${parentName} → ${comp.displayName}`);
-      }
-    };
-
-    this.currentResult.middlewares.forEach(mw => {
-      collectUsages(mw, mw.name, false);
-      collectFromComponents(mw.components, mw.name);
-    });
+    const usages = this.collectPropertyUsages(
+      property, 
+      'resLocalsWrites', 
+      'resLocalsReads'
+    );
 
     this.panel?.webview.postMessage({
       command: 'propertyUsages',
@@ -412,18 +386,59 @@ export class FlowAnalyzerPanel extends AbstractPanel {
     const info = this.currentResult.allReqTransactionProperties.get(property);
     if (!info) return;
 
-    // Find all usages across middlewares and their components
+    const usages = this.collectPropertyUsages(
+      property, 
+      'reqTransactionWrites', 
+      'reqTransactionReads'
+    );
+
+    this.panel?.webview.postMessage({
+      command: 'reqTransactionUsages',
+      content: {
+        property,
+        producers: info.producers,
+        consumers: info.consumers,
+        usages
+      }
+    });
+  }
+
+  /**
+   * Collect property usages across middlewares and components
+   * Used by both trackProperty and trackReqTransaction
+   */
+  private collectPropertyUsages(
+    property: string,
+    writesKey: string,
+    readsKey: string
+  ): any[] {
+    if (!this.currentResult) return [];
+
     const usages: any[] = [];
+    const seenKeys = new Set<string>();
+    const seenFilePaths = new Set<string>();
     
     const collectUsages = (source: any, sourceName: string, isComponent: boolean) => {
-      const writes = source.reqTransactionWrites?.filter((w: any) => w.property === property) || [];
-      const reads = source.reqTransactionReads?.filter((r: any) => r.property === property) || [];
+      if (isComponent && seenFilePaths.has(source.filePath)) {
+        return;
+      }
+      if (isComponent) {
+        seenFilePaths.add(source.filePath);
+      }
+
+      const writes = source[writesKey]?.filter((w: any) => w.property === property) || [];
+      const reads = source[readsKey]?.filter((r: any) => r.property === property) || [];
 
       writes.forEach((w: any) => {
+        const key = `${source.filePath}:${w.lineNumber}:write`;
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
+        
         usages.push({
           source: sourceName,
           filePath: source.filePath,
           isComponent,
+          isLibrary: w.isLibrary,
           type: 'write',
           lineNumber: w.lineNumber,
           codeSnippet: w.codeSnippet
@@ -431,10 +446,15 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       });
 
       reads.forEach((r: any) => {
+        const key = `${source.filePath}:${r.lineNumber}:read`;
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
+        
         usages.push({
           source: sourceName,
           filePath: source.filePath,
           isComponent,
+          isLibrary: r.isLibrary,
           type: 'read',
           lineNumber: r.lineNumber,
           codeSnippet: r.codeSnippet
@@ -454,15 +474,7 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       collectFromComponents(mw.components, mw.name);
     });
 
-    this.panel?.webview.postMessage({
-      command: 'reqTransactionUsages',
-      content: {
-        property,
-        producers: info.producers,
-        consumers: info.consumers,
-        usages
-      }
-    });
+    return usages;
   }
 
   private async openConfigFile(configType: string, configKey?: string): Promise<void> {

@@ -10,6 +10,27 @@ import {
   RequireInfo,
   ResLocalsUsage
 } from '../models/flow-analyzer-types';
+import { normalizePath, isLibraryPath as sharedIsLibraryPath } from '../shared';
+
+/**
+ * Array mutation methods used for detecting writes
+ */
+const MUTATION_METHODS = [
+  'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin',
+  'set', 'add', 'delete', 'clear'
+] as const;
+
+const MUTATION_METHODS_PATTERN = new RegExp(`\\.(${MUTATION_METHODS.join('|')})$`);
+
+/**
+ * Native JavaScript methods/properties to skip when analyzing data usage
+ */
+const NATIVE_METHODS_AND_PROPS = [
+  'length', 'indexOf', 'find', 'findIndex', 'filter', 'map', 'reduce', 'reduceRight',
+  'forEach', 'some', 'every', 'includes', 'slice', 'concat', 'join', 'flat', 'flatMap',
+  'keys', 'values', 'entries', 'at', 'toString', 'toLocaleString', 'constructor',
+  'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'valueOf'
+] as const;
 
 /**
  * Analyzes middleware source code to extract:
@@ -31,75 +52,43 @@ export class MiddlewareAnalyzer {
     private workspaceFolder: string,
     private middlewareName: string
   ) {
-    // Normalize path for Windows: convert /c/... to C:/...
-    this.normalizedWorkspaceFolder = this.normalizePath(workspaceFolder);
-  }
-
-  /**
-   * Normalize path for cross-platform compatibility
-   * Converts Git Bash style /c/... to Windows style C:/...
-   */
-  private normalizePath(p: string): string {
-    // Convert /c/Users/... to C:/Users/...
-    if (/^\/[a-zA-Z]\//.test(p)) {
-      return p.replace(/^\/([a-zA-Z])\//, '$1:/');
-    }
-    return p;
+    this.normalizedWorkspaceFolder = normalizePath(workspaceFolder);
   }
 
   private get middlewareRoot(): string {
     return path.join(this.normalizedWorkspaceFolder, `agl-${this.middlewareName}-middleware`);
   }
 
-  private get aglCoreRoot(): string {
-    return path.join(this.normalizedWorkspaceFolder, 'agl-core');
-  }
-
-  private get aglUtilsRoot(): string {
-    return path.join(this.normalizedWorkspaceFolder, 'agl-utils');
-  }
-
-  private get aglCacheRoot(): string {
-    return path.join(this.normalizedWorkspaceFolder, 'agl-cache');
-  }
-
-  private get aglLoggerRoot(): string {
-    return path.join(this.normalizedWorkspaceFolder, 'agl-logger');
+  /**
+   * Get node_modules path for @opus modules
+   */
+  private getNodeModulesAglPath(moduleName: string): string {
+    return path.join(this.middlewareRoot, 'node_modules', '@opus', moduleName);
   }
 
   /**
-   * Check if a file path belongs to a low-level library (agl-core, agl-utils, etc.)
-   * These files contain infrastructure code rather than business logic
+   * Check if workspace-level library exists (development mode)
+   * If not, use node_modules path (installed dependency mode)
+   */
+  private getAglModuleRoot(moduleName: string): string | undefined {
+    const workspacePath = path.join(this.normalizedWorkspaceFolder, moduleName);
+    if (fs.existsSync(workspacePath)) {
+      return workspacePath;
+    }
+    
+    const nodeModulesPath = this.getNodeModulesAglPath(moduleName);
+    if (fs.existsSync(nodeModulesPath)) {
+      return nodeModulesPath;
+    }
+    
+    return undefined;
+  }
+
+  /**
+   * Check if a file path belongs to a low-level library
    */
   private isLibraryPath(filePath: string): boolean {
-    if (!filePath) return false;
-    
-    const libraryPatterns = [
-      // agl-utils library files
-      /agl-utils[/\\]lib[/\\]/i,
-      /agl-utils[/\\]index\.js$/i,
-      
-      // agl-core utility files
-      /agl-core[/\\]utils[/\\]wrapper[/\\]/i,
-      /agl-core[/\\]utils[/\\]panic/i,
-      /agl-core[/\\]shared[/\\]/i,
-      /agl-core[/\\]index\.js$/i,
-      
-      // agl-cache files
-      /agl-cache[/\\]/i,
-      
-      // agl-logger files
-      /agl-logger[/\\]/i,
-      
-      // Local utils/wrapper in middleware projects
-      /utils[/\\]wrapper[/\\]request[/\\]/i,
-      /utils[/\\]wrapper[/\\]response[/\\]/i,
-      
-      // Shared utility files in middleware projects
-      /shared[/\\].*[/\\](wrapper|request|http)/i,
-    ];
-    
-    return libraryPatterns.some(pattern => pattern.test(filePath));
+    return sharedIsLibraryPath(filePath);
   }
 
   /**
@@ -108,7 +97,6 @@ export class MiddlewareAnalyzer {
   public analyzeMiddleware(middlewarePath: string): MiddlewareAnalysis {
     this.analyzedPaths.clear();
     this.analyzedComponents.clear();
-    console.log(`[FlowAnalyzer] Starting analysis of: ${middlewarePath}`);
 
     const result: MiddlewareAnalysis = {
       name: middlewarePath,
@@ -149,28 +137,18 @@ export class MiddlewareAnalyzer {
     try {
       const content = fs.readFileSync(fullPath, 'utf-8');
       const lines = content.split('\n');
-      console.log(`[FlowAnalyzer] File has ${lines.length} lines`);
 
-      console.log(`[FlowAnalyzer] Analyzing res.locals...`);
       this.analyzeResLocals(lines, result.resLocalsReads, result.resLocalsWrites, fullPath);
-      console.log(`[FlowAnalyzer] Analyzing req.transaction...`);
       this.analyzeReqTransaction(lines, result.reqTransactionReads, result.reqTransactionWrites, fullPath);
-      console.log(`[FlowAnalyzer] Analyzing data usages...`);
       this.analyzeDataUsages(lines, result.dataUsages, fullPath);
-      console.log(`[FlowAnalyzer] Analyzing external calls...`);
       this.analyzeExternalCalls(lines, result.externalCalls, fullPath);
-      console.log(`[FlowAnalyzer] Analyzing config deps...`);
       this.analyzeConfigDeps(lines, result.configDeps);
-      console.log(`[FlowAnalyzer] Analyzing requires...`);
       const requires = this.analyzeRequires(lines, fullPath);
       result.internalDeps = requires.map(r => r.modulePath);
       this.findFunctionLocations(lines, result);
 
-      console.log(`[FlowAnalyzer] Analyzing ${requires.length} components...`);
       result.components = this.analyzeComponents(requires, fullPath, 0);
-      console.log(`[FlowAnalyzer] Aggregating component data...`);
       this.aggregateComponentData(result);
-      console.log(`[FlowAnalyzer] Middleware analysis complete`);
 
     } catch (error) {
       console.error(`Error analyzing ${middlewarePath}:`, error);
@@ -264,25 +242,34 @@ export class MiddlewareAnalyzer {
   }
 
   private resolveAglModulePath(modulePath: string): string | undefined {
-    const moduleRoots: { [key: string]: string } = {
-      '@opus/agl-core': this.aglCoreRoot,
-      '@opus/agl-utils': this.aglUtilsRoot,
-      '@opus/agl-cache': this.aglCacheRoot,
-      '@opus/agl-logger': this.aglLoggerRoot
+    // Map @opus/agl-xxx to the actual module name
+    const moduleMapping: { [key: string]: string } = {
+      '@opus/agl-core': 'agl-core',
+      '@opus/agl-utils': 'agl-utils',
+      '@opus/agl-cache': 'agl-cache',
+      '@opus/agl-logger': 'agl-logger'
     };
 
     // Check for exact module match first (e.g., @opus/agl-core)
-    if (moduleRoots[modulePath]) {
-      const indexPath = path.join(moduleRoots[modulePath], 'index.js');
-      if (fs.existsSync(indexPath)) {
-        return indexPath;
+    if (moduleMapping[modulePath]) {
+      const root = this.getAglModuleRoot(moduleMapping[modulePath]);
+      if (root) {
+        const indexPath = path.join(root, 'index.js');
+        if (fs.existsSync(indexPath)) {
+          return indexPath;
+        }
       }
       return undefined;
     }
 
     // Handle submodule paths (e.g., @opus/agl-core/shared/authUserCookieDecrypt)
-    for (const [modulePrefix, root] of Object.entries(moduleRoots)) {
+    for (const [modulePrefix, moduleName] of Object.entries(moduleMapping)) {
       if (modulePath.startsWith(modulePrefix + '/')) {
+        const root = this.getAglModuleRoot(moduleName);
+        if (!root) {
+          continue;
+        }
+        
         const subPath = modulePath.substring(modulePrefix.length + 1);
         const basePath = path.join(root, subPath);
         
@@ -307,12 +294,10 @@ export class MiddlewareAnalyzer {
 
   private analyzeComponents(requires: RequireInfo[], parentPath: string, depth: number): ComponentAnalysis[] {
     if (depth >= this.MAX_DEPTH) {
-      console.log(`[FlowAnalyzer] Max depth ${this.MAX_DEPTH} reached, stopping recursion`);
       return [];
     }
 
     const components: ComponentAnalysis[] = [];
-    console.log(`[FlowAnalyzer] Depth ${depth}: Processing ${requires.filter(r => r.resolvedPath && (r.isLocal || r.isAglModule)).length} local/agl requires`);
 
     for (const req of requires) {
       if (!req.resolvedPath) {
@@ -340,7 +325,6 @@ export class MiddlewareAnalyzer {
         }
       } else {
         // Full analysis for new components
-        console.log(`[FlowAnalyzer] Depth ${depth}: Analyzing component: ${req.modulePath}`);
         this.analyzedPaths.add(req.resolvedPath);
         const component = this.analyzeComponent(req, parentPath, depth);
         if (component && component.exists) {
@@ -447,7 +431,18 @@ export class MiddlewareAnalyzer {
     result.allExternalCalls = [...result.externalCalls];
     result.allConfigDeps = [...result.configDeps];
 
+    // Track already collected file paths to avoid duplicate collection
+    // when same component is referenced from multiple places
+    const collectedPaths = new Set<string>();
+
     const collectFromComponent = (component: ComponentAnalysis) => {
+      // Skip if this component's file has already been collected
+      // This prevents duplicate data when same file is referenced multiple times
+      if (collectedPaths.has(component.filePath)) {
+        return;
+      }
+      collectedPaths.add(component.filePath);
+
       result.allResLocalsReads.push(...component.resLocalsReads);
       result.allResLocalsWrites.push(...component.resLocalsWrites);
       result.allReqTransactionReads.push(...component.reqTransactionReads);
@@ -465,11 +460,11 @@ export class MiddlewareAnalyzer {
       collectFromComponent(component);
     }
 
-    // Deduplicate all aggregated data
-    result.allResLocalsReads = this.deduplicateByPropertyAndSource(result.allResLocalsReads);
-    result.allResLocalsWrites = this.deduplicateByPropertyAndSource(result.allResLocalsWrites);
-    result.allReqTransactionReads = this.deduplicateByPropertyAndSource(result.allReqTransactionReads);
-    result.allReqTransactionWrites = this.deduplicateByPropertyAndSource(result.allReqTransactionWrites);
+    // Deduplicate all aggregated data - removes exact duplicates but keeps all unique source files
+    result.allResLocalsReads = this.deduplicateUsages(result.allResLocalsReads);
+    result.allResLocalsWrites = this.deduplicateUsages(result.allResLocalsWrites);
+    result.allReqTransactionReads = this.deduplicateUsages(result.allReqTransactionReads);
+    result.allReqTransactionWrites = this.deduplicateUsages(result.allReqTransactionWrites);
     result.allDataUsages = this.deduplicateDataUsages(result.allDataUsages);
     result.allExternalCalls = this.deduplicateExternalCalls(result.allExternalCalls);
     result.allConfigDeps = this.deduplicateConfigDeps(result.allConfigDeps);
@@ -498,16 +493,21 @@ export class MiddlewareAnalyzer {
   }
 
   /**
-   * Deduplicate data usages by sourceType, property, type, and source path
+   * Deduplicate data usages (req.query, req.headers, etc.)
+   * Keep one entry per sourceType + property + type + sourcePath combination
+   * This removes exact duplicates but preserves all unique source files
    */
   private deduplicateDataUsages(usages: DataUsage[]): DataUsage[] {
     const seen = new Map<string, DataUsage>();
+    
     for (const usage of usages) {
+      // Key by sourceType + property + type + sourcePath
       const key = `${usage.sourceType}:${usage.property}:${usage.type}:${usage.sourcePath}`;
       if (!seen.has(key)) {
         seen.set(key, usage);
       }
     }
+    
     return Array.from(seen.values());
   }
 
@@ -664,7 +664,6 @@ export class MiddlewareAnalyzer {
   }
 
   private analyzeResLocals(lines: string[], reads: ResLocalsUsage[], writes: ResLocalsUsage[], sourcePath: string): void {
-    // Check if this is a library file - we still analyze it but mark the results
     const isLibrary = this.isLibraryPath(sourcePath);
 
     // Support both res.locals and response.locals
@@ -677,20 +676,13 @@ export class MiddlewareAnalyzer {
     // Pre-populate sets with existing entries
     writes.forEach(w => seenWrites.add(`${w.property}:${w.lineNumber}:${w.sourcePath}`));
     reads.forEach(r => seenReads.add(`${r.property}:${r.lineNumber}:${r.sourcePath}`));
-    
-    // List of mutation methods that modify the object/array they're called on
-    const mutationMethods = [
-      'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin',
-      'set', 'add', 'delete', 'clear'
-    ];
-    const mutationMethodsPattern = new RegExp(`\\.(${mutationMethods.join('|')})$`);
 
     lines.forEach((line, index) => {
       const lineNumber = index + 1;
       let match;
       resLocalsPattern.lastIndex = 0;
 
-      // Check for delete statement: delete res.locals.xxx or delete response.locals.xxx
+      // Check for delete statement
       const deleteMatch = line.match(/delete\s+(?:res|response)\.locals\.(\w+(?:\.\w+)*)/);
       if (deleteMatch) {
         const property = deleteMatch[1];
@@ -716,49 +708,28 @@ export class MiddlewareAnalyzer {
         const afterMatch = line.substring(matchIndex + match[0].length);
         const beforeMatch = line.substring(0, matchIndex);
 
-        // Skip if this was already captured as a delete operation (support both res and response)
+        // Skip if this was already captured as a delete operation
         if (/delete\s+(?:res|response)\.locals\.\w*$/.test(beforeMatch) || /delete\s+$/.test(beforeMatch)) continue;
 
         // Handle mutation methods captured in property name
         let isMutationMethodCall = false;
-        const methodMatch = property.match(mutationMethodsPattern);
+        const methodMatch = property.match(MUTATION_METHODS_PATTERN);
         if (methodMatch && /^\s*\(/.test(afterMatch)) {
           isMutationMethodCall = true;
           property = property.substring(0, property.length - methodMatch[0].length);
         }
         
         // Skip JavaScript native array/object methods and properties
-        // These are not actual data properties set by the application
-        const nativeMethodsAndProps = [
-          'length', 'indexOf', 'find', 'findIndex', 'filter', 'map', 'reduce', 'reduceRight',
-          'forEach', 'some', 'every', 'includes', 'slice', 'concat', 'join', 'flat', 'flatMap',
-          'keys', 'values', 'entries', 'at', 'toString', 'toLocaleString', 'constructor',
-          'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'valueOf'
-        ];
-        
-        // Check if the property ends with a native method/property being called or accessed
         const propertyParts = property.split('.');
         const lastPart = propertyParts[propertyParts.length - 1];
-        if (nativeMethodsAndProps.includes(lastPart)) {
-          // Remove the native method/property part to get the actual data property
+        if (NATIVE_METHODS_AND_PROPS.includes(lastPart as typeof NATIVE_METHODS_AND_PROPS[number])) {
           propertyParts.pop();
-          if (propertyParts.length === 0) continue; // Skip if only native method
+          if (propertyParts.length === 0) continue;
           property = propertyParts.join('.');
         }
 
         // Determine if write operation
-        const isSpreadRead = /\.\.\.\s*$/.test(beforeMatch);
-        const isWrite = !isSpreadRead && (
-          isMutationMethodCall ||
-          /^\s*=(?!=)/.test(afterMatch) ||                    // direct assignment
-          /^\s*\[[^\]]*\]\s*=(?!=)/.test(afterMatch) ||       // indexed assignment
-          /^\s*\.\w+\s*=(?!=)/.test(afterMatch) ||            // property assignment
-          /^\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // compound assignment
-          /^\s*\[[^\]]*\]\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // indexed compound
-          /^\s*\.(push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin)\s*\(/.test(afterMatch) ||  // array mutation
-          /^\s*\.(set|add|delete|clear)\s*\(/.test(afterMatch) ||  // Map/Set mutation
-          /Object\.assign\s*\(\s*$/.test(beforeMatch)         // Object.assign target
-        );
+        const isWrite = this.isWriteOperation(beforeMatch, afterMatch, isMutationMethodCall);
 
         const key = `${property}:${lineNumber}:${sourcePath}`;
         
@@ -796,6 +767,24 @@ export class MiddlewareAnalyzer {
         }
       }
     });
+  }
+
+  /**
+   * Determines if an operation is a write based on context
+   */
+  private isWriteOperation(beforeMatch: string, afterMatch: string, isMutationMethodCall: boolean): boolean {
+    const isSpreadRead = /\.\.\.\s*$/.test(beforeMatch);
+    return !isSpreadRead && (
+      isMutationMethodCall ||
+      /^\s*=(?!=)/.test(afterMatch) ||                    // direct assignment
+      /^\s*\[[^\]]*\]\s*=(?!=)/.test(afterMatch) ||       // indexed assignment
+      /^\s*\.\w+\s*=(?!=)/.test(afterMatch) ||            // property assignment
+      /^\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // compound assignment
+      /^\s*\[[^\]]*\]\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // indexed compound
+      /^\s*\.(push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin)\s*\(/.test(afterMatch) ||  // array mutation
+      /^\s*\.(set|add|delete|clear)\s*\(/.test(afterMatch) ||  // Map/Set mutation
+      /Object\.assign\s*\(\s*$/.test(beforeMatch)         // Object.assign target
+    );
   }
 
   /**
@@ -908,13 +897,6 @@ export class MiddlewareAnalyzer {
     writes.forEach(w => seenWrites.add(`${w.property}:${w.lineNumber}:${w.sourcePath}`));
     reads.forEach(r => seenReads.add(`${r.property}:${r.lineNumber}:${r.sourcePath}`));
     
-    // List of mutation methods that modify the object/array they're called on
-    const mutationMethods = [
-      'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin',
-      'set', 'add', 'delete', 'clear'
-    ];
-    const mutationMethodsPattern = new RegExp(`\\.(${mutationMethods.join('|')})$`);
-    
     // Pattern to detect logger calls - skip these for direct req.transaction usage
     const loggerCallPattern = /logger\.(info|warn|error|debug|trace|fatal|log)\s*\([^)]*$/;
 
@@ -922,7 +904,7 @@ export class MiddlewareAnalyzer {
       const lineNumber = index + 1;
       let match;
       
-      // Check for delete statement: delete req.transaction.xxx or delete request.transaction.xxx
+      // Check for delete statement
       const deleteMatch = line.match(/delete\s+(?:req|request)\.transaction\.(\w+(?:\.\w+)*)/);
       if (deleteMatch) {
         const property = deleteMatch[1];
@@ -950,30 +932,19 @@ export class MiddlewareAnalyzer {
         const afterMatch = line.substring(matchIndex + match[0].length);
         const beforeMatch = line.substring(0, matchIndex);
 
-        // Skip if this was already captured as a delete operation (support both req and request)
+        // Skip if this was already captured as a delete operation
         if (/delete\s+(?:req|request)\.transaction\.\w*$/.test(beforeMatch) || /delete\s+$/.test(beforeMatch)) continue;
 
         // Handle mutation methods captured in property name
         let isMutationMethodCall = false;
-        const methodMatch = property.match(mutationMethodsPattern);
+        const methodMatch = property.match(MUTATION_METHODS_PATTERN);
         if (methodMatch && /^\s*\(/.test(afterMatch)) {
           isMutationMethodCall = true;
           property = property.substring(0, property.length - methodMatch[0].length);
         }
 
-        // Determine if write operation
-        const isSpreadRead = /\.\.\.\s*$/.test(beforeMatch);
-        const isWrite = !isSpreadRead && (
-          isMutationMethodCall ||
-          /^\s*=(?!=)/.test(afterMatch) ||                    // direct assignment
-          /^\s*\[[^\]]*\]\s*=(?!=)/.test(afterMatch) ||       // indexed assignment
-          /^\s*\.\w+\s*=(?!=)/.test(afterMatch) ||            // property assignment
-          /^\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // compound assignment
-          /^\s*\[[^\]]*\]\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // indexed compound
-          /^\s*\.(push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin)\s*\(/.test(afterMatch) ||  // array mutation
-          /^\s*\.(set|add|delete|clear)\s*\(/.test(afterMatch) ||  // Map/Set mutation
-          /Object\.assign\s*\(\s*$/.test(beforeMatch)         // Object.assign target
-        );
+        // Determine if write operation using shared helper
+        const isWrite = this.isWriteOperation(beforeMatch, afterMatch, isMutationMethodCall);
 
         const key = `${property}:${lineNumber}:${sourcePath}`;
         
@@ -1020,15 +991,13 @@ export class MiddlewareAnalyzer {
         const afterMatch = line.substring(matchIndex + match[0].length);
         const codeSnippet = line.trim();
         
-        // Skip if this is a logger call - check if beforeMatch contains logger.xxx( pattern
+        // Skip if this is a logger call
         if (loggerCallPattern.test(beforeMatch)) {
           continue;
         }
         
         // Also skip if it's passed as argument to any function and looks like logging context
-        // e.g., someFunction(..., req.transaction) at end of call
         if (/,\s*$/.test(beforeMatch) && /^\s*\)/.test(afterMatch)) {
-          // Check if it's a logger call by looking back further
           if (/logger\.\w+\s*\(/.test(line)) {
             continue;
           }
@@ -1040,8 +1009,8 @@ export class MiddlewareAnalyzer {
         
         // Determine if write operation
         const isWrite = (
-          /^\s*=(?!=)/.test(afterMatch) ||                    // direct assignment: req.transaction = {...}
-          /Object\.assign\s*\(\s*$/.test(beforeMatch)         // Object.assign target
+          /^\s*=(?!=)/.test(afterMatch) ||
+          /Object\.assign\s*\(\s*$/.test(beforeMatch)
         );
         
         if (isWrite) {
@@ -1118,14 +1087,22 @@ export class MiddlewareAnalyzer {
     }
   }
 
-  private deduplicateByPropertyAndSource(usages: ResLocalsUsage[]): ResLocalsUsage[] {
+  /**
+   * Deduplicate res.locals/req.transaction usages
+   * Keep one entry per property + sourcePath combination
+   * This removes exact duplicates but preserves all unique source files
+   */
+  private deduplicateUsages(usages: ResLocalsUsage[]): ResLocalsUsage[] {
     const seen = new Map<string, ResLocalsUsage>();
+    
     for (const u of usages) {
+      // Key by property + sourcePath (same property in different files = different entries)
       const key = `${u.property}:${u.sourcePath}`;
       if (!seen.has(key)) {
         seen.set(key, u);
       }
     }
+    
     return Array.from(seen.values());
   }
 
@@ -1134,111 +1111,121 @@ export class MiddlewareAnalyzer {
     const isLibrary = this.isLibraryPath(sourcePath);
 
     // Patterns that capture meaningful template/endpoint names
+    // Note: For multi-line calls, we use [\s\S]*? for non-greedy multi-line matching
+    // Note: (?:\w+\.)? matches any prefix like 'wrapper.', 'avsRequest.', etc. or no prefix
+    // IMPORTANT: Use [\s\S]*? instead of [^,]* to match across line breaks for multi-line function calls
     const patterns: { pattern: RegExp, type: ExternalCall['type'], extractName?: boolean }[] = [
-      // DCQ patterns - capture template name from the last string argument before closing paren
-      { pattern: /(?:wrapper\.)?callAVSDCQTemplate\s*\([^)]*,\s*['"](\w+)['"]\s*\)/g, type: 'dcq', extractName: true },
-      { pattern: /(?:wrapper\.)?callDCQ\s*\([^)]*,\s*['"](\w+)['"]/g, type: 'dcq', extractName: true },
-      { pattern: /(?:wrapper\.)?callAVSDCQSearch\s*\([^)]*,\s*['"](\w+)['"]/g, type: 'dcq', extractName: true },
+      // DCQ patterns - capture template name (last string argument before closing paren)
+      // Pattern matches: callAVSDCQTemplate(..., 'TemplateName') across multiple lines
+      { pattern: /(?:\w+\.)?callAVSDCQTemplate\s*\([\s\S]*?['"](\w+)['"]\s*\)/g, type: 'dcq', extractName: true },
+      { pattern: /(?:\w+\.)?callDCQ\s*\([\s\S]*?['"](\w+)['"][\s\S]*?\)/g, type: 'dcq', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSDCQSearch\s*\([\s\S]*?['"](\w+)['"][\s\S]*?\)/g, type: 'dcq', extractName: true },
       
       // AVS patterns - capture endpoint/action name based on method signature
+      // Use comma-separated matching with [\s\S]*? for multi-line support
       // callAVS(req, res, apiType, method, action, ...) - action is 5th param
-      { pattern: /(?:wrapper\.)?callAVS\s*\([^,]*,[^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVS\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2C(req, res, action, ...) - action is 3rd param
-      { pattern: /(?:wrapper\.)?callAVSB2C\s*\([^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2C\s*\([\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2CWithFullResponse(req, res, action, ...) - action is 3rd param
-      { pattern: /(?:wrapper\.)?callAVSB2CWithFullResponse\s*\([^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2CWithFullResponse\s*\([\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2B(req, res, method, action, ...) - action is 4th param
-      { pattern: /(?:wrapper\.)?callAVSB2B\s*\([^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2B\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2BWithFullResponse(req, res, method, action, ...) - action is 4th param
-      { pattern: /(?:wrapper\.)?callAVSB2BWithFullResponse\s*\([^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2BWithFullResponse\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2BVersioned(req, res, version, method, action, ...) - action is 5th param
-      { pattern: /(?:wrapper\.)?callAVSB2BVersioned\s*\([^,]*,[^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2BVersioned\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2BVersionedWithFullResponse(req, res, version, method, action, ...) - action is 5th param
-      { pattern: /(?:wrapper\.)?callAVSB2BVersionedWithFullResponse\s*\([^,]*,[^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2BVersionedWithFullResponse\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       
       // Pinboard patterns - callPinboard(req, res, method, restParams, ...) - no string name, detect the call
-      { pattern: /(?:wrapper\.)?callPinboard\s*\(/g, type: 'pinboard', extractName: false },
+      { pattern: /(?:\w+\.)?callPinboard\s*\(/g, type: 'pinboard', extractName: false },
       
       // Elasticsearch patterns - capture template name based on method signature
       // callAVSESTemplate(req, res, templateName, ...) - templateName is 3rd param
-      { pattern: /(?:wrapper\.)?callAVSESTemplate\s*\([^,]*,[^,]*,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSESTemplate\s*\([\s\S]*?,[\s\S]*?,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
       // callDcqDecoupledESTemplate(req, res, templateName, ...) - templateName is 3rd param
-      { pattern: /(?:wrapper\.)?callDcqDecoupledESTemplate\s*\([^,]*,[^,]*,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
+      { pattern: /(?:\w+\.)?callDcqDecoupledESTemplate\s*\([\s\S]*?,[\s\S]*?,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
       // callAVSESSearch(req, res, indexes, ...) - indexes is array, just detect the call
-      { pattern: /(?:wrapper\.)?callAVSESSearch\s*\(/g, type: 'elasticsearch', extractName: false },
+      { pattern: /(?:\w+\.)?callAVSESSearch\s*\(/g, type: 'elasticsearch', extractName: false },
       // callES(req, res, method, indexes, ...) - indexes is array, just detect the call
-      { pattern: /(?:wrapper\.)?callES\s*\(/g, type: 'elasticsearch', extractName: false },
+      { pattern: /(?:\w+\.)?callES\s*\(/g, type: 'elasticsearch', extractName: false },
       
       // External API patterns - callExternal(req, res, method, url, ...) - url is 4th param
-      { pattern: /(?:wrapper\.)?callExternal\s*\([^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'external', extractName: true },
+      { pattern: /(?:\w+\.)?callExternal\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'external', extractName: true },
       // Also match when url is a variable
-      { pattern: /(?:wrapper\.)?callExternal\s*\([^,]*,[^,]*,[^,]*,\s*(\w+)/g, type: 'external', extractName: true },
+      { pattern: /(?:\w+\.)?callExternal\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*(\w+)/g, type: 'external', extractName: true },
       
       // AVA patterns
-      { pattern: /callAVA\s*\(/g, type: 'ava', extractName: false },
+      { pattern: /(?:\w+\.)?callAVA\s*\(/g, type: 'ava', extractName: false },
       
       // DSF patterns - callDsf(req, res, method, url, ...) - url is 4th param
-      { pattern: /(?:wrapper\.)?callDsf\s*\([^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'dsf', extractName: true },
-      { pattern: /(?:wrapper\.)?callDsf\s*\([^,]*,[^,]*,[^,]*,\s*(\w+)/g, type: 'dsf', extractName: true },
+      { pattern: /(?:\w+\.)?callDsf\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'dsf', extractName: true },
+      { pattern: /(?:\w+\.)?callDsf\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*(\w+)/g, type: 'dsf', extractName: true },
       
       // Microservice patterns - capture service name
-      { pattern: /(?:wrapper\.)?callAVSMicroservice\s*\([^,]*,\s*['"]([^'"]+)['"]/g, type: 'microservice', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSMicroservice\s*\([\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'microservice', extractName: true },
       
       // DCQ ES Mapper patterns - method name IS the endpoint name
-      { pattern: /(?:wrapper\.)?callGetAggregatedContentDetail\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetLiveContentMetadata\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetVodContentMetadata\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetLauncherMetadata\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetLiveChannelList\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callSearchSuggestions\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callSearchVodEvents\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callSearchContents\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetLiveInfo\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetEpg\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callESTemplate\s*\([^,]*,[^,]*,[^,]*,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
+      { pattern: /(?:\w+\.)?callGetAggregatedContentDetail\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetLiveContentMetadata\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetVodContentMetadata\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetLauncherMetadata\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetLiveChannelList\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callSearchSuggestions\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callSearchVodEvents\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callSearchContents\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetLiveInfo\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetEpg\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callESTemplate\s*\([\s\S]*?['"](\w+)['"][\s\S]*?\)/g, type: 'elasticsearch', extractName: true },
     ];
 
     // Use Set for O(1) deduplication
     const seen = new Set<string>();
     results.forEach(e => seen.add(`${e.type}:${e.template || ''}:${e.lineNumber}:${e.sourcePath}`));
 
-    // First pass: detect standard patterns
-    lines.forEach((line, index) => {
-      const lineNumber = index + 1;
+    // Join all lines for multi-line pattern matching
+    const content = lines.join('\n');
 
-      for (const { pattern, type, extractName } of patterns) {
-        pattern.lastIndex = 0;
-        let match;
-        while ((match = pattern.exec(line)) !== null) {
-          let template: string | undefined;
-          
-          if (extractName && match[1]) {
-            // Extract template name from capture group
-            template = match[1];
-          } else if (!extractName) {
-            // Extract method name from the pattern match for methods like callGetAggregatedContentDetail
-            const methodMatch = match[0].match(/call(\w+)\s*\(/);
-            if (methodMatch) {
-              template = methodMatch[1];
-            }
-          }
-          
-          const key = `${type}:${template || ''}:${lineNumber}:${sourcePath}`;
-          
-          if (!seen.has(key)) {
-            seen.add(key);
-            results.push({
-              type,
-              lineNumber,
-              template,
-              codeSnippet: line.trim(),
-              sourcePath,
-              isLibrary
-            });
+    // First pass: detect standard patterns (supports multi-line calls)
+    for (const { pattern, type, extractName } of patterns) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(content)) !== null) {
+        let template: string | undefined;
+        
+        // Calculate line number from match position
+        const beforeMatch = content.substring(0, match.index);
+        const lineNumber = (beforeMatch.match(/\n/g) || []).length + 1;
+        
+        if (extractName && match[1]) {
+          // Extract template name from capture group
+          template = match[1];
+        } else if (!extractName) {
+          // Extract method name from the pattern match for methods like callGetAggregatedContentDetail
+          const methodMatch = match[0].match(/call(\w+)\s*\(/);
+          if (methodMatch) {
+            template = methodMatch[1];
           }
         }
+        
+        const key = `${type}:${template || ''}:${lineNumber}:${sourcePath}`;
+        
+        if (!seen.has(key)) {
+          seen.add(key);
+          // Get the line for code snippet
+          const snippetLine = lines[lineNumber - 1] || '';
+          results.push({
+            type,
+            lineNumber,
+            template,
+            codeSnippet: snippetLine.trim(),
+            sourcePath,
+            isLibrary
+          });
+        }
       }
-    });
+    }
     
     // Second pass: detect HTTP client calls and extract meaningful names from context
     this.detectHttpCalls(lines, results, seen, sourcePath, isLibrary);
@@ -1246,15 +1233,10 @@ export class MiddlewareAnalyzer {
   
   /**
    * Detect HTTP client calls and extract meaningful endpoint names from context
-   * Skip library files - httpClient calls in wrapper libraries are implementation details
+   * For library files, still detect the calls but mark them as isLibrary
+   * This allows them to show in component details while being filtered in aggregated views
    */
   private detectHttpCalls(lines: string[], results: ExternalCall[], seen: Set<string>, sourcePath: string, isLibrary: boolean = false): void {
-    // Skip HTTP detection in library files - these are implementation details of wrappers
-    // Users care about high-level calls like callAVSDCQTemplate, not the underlying httpClient
-    if (isLibrary) {
-      return;
-    }
-
     const httpPatterns = [
       /aglUtils\.httpClient\s*\(/,
       /aglUtils\.forwardRequest\s*\(/,
@@ -1278,7 +1260,7 @@ export class MiddlewareAnalyzer {
               template: endpointName,
               codeSnippet: line.trim(),
               sourcePath,
-              isLibrary
+              isLibrary  // Mark as library - will be filtered in deduplicateExternalCalls but visible in component details
             });
           }
           break; // Only count once per line

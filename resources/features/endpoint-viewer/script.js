@@ -42,7 +42,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 valueSpan.title = 'Click to load Mapper config';
                 valueSpan.classList.add('json-viewer-json-mapper');
                 valueSpan.addEventListener('click', () => {
-                    console.log('Opening mapper:', value);
                     vscode.postMessage({ command: 'openMapperViewer', mapperName: value });
                 });
                 return 0;
