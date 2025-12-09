@@ -7,9 +7,13 @@ import { HighlightDecorationProvider } from './providers/highlight-decoration-pr
 import { CommandService } from './services/command-service';
 import { ProviderManager } from './services/provider-manager';
 import { ViewManager } from './services/view-manager';
+import { CONFIG_PREFIX, MIDDLEWARE_ORDER } from './shared';
 
-const CONFIG_PREFIX = 'agl-config-';
-
+/**
+ * Discover middleware configurations in the workspace
+ * @param root - The workspace root folder
+ * @returns Array of middleware names (without the agl-config- prefix)
+ */
 function discoverMiddlewares(root: string): string[] {
   try {
     return fs
@@ -47,19 +51,19 @@ export function activate(context: vscode.ExtensionContext) {
         return;
     }
     
-    const middlewareOrder = ['page-composition', 'content', 'recording', 'proxy', 'plus', 'stub', 'mediaroom', 'user', 'proxy', 'main', 'safetynet'];
-
-    const sortedMiddlewareNames = middlewareOrder.filter(name => middlewareNames.includes(name));
-
-    let middlewareName = sortedMiddlewareNames[0]
+    // Sort middlewares by preferred order
+    const sortedMiddlewareNames = MIDDLEWARE_ORDER.filter(name => middlewareNames.includes(name));
+    const middlewareName = sortedMiddlewareNames[0] || middlewareNames[0];
 
     const commandService = new CommandService(workspaceFolder, providerManager, context);
 
-    activateDefaultMappersAndEndpoints(viewManager, providerManager, workspaceFolder, middlewareName);    
-    activateMiddleware(workspaceFolder, middlewareName);
-    activateConfig('template');
-    activateConfig('nanoConfigKey');
-    activateConfig('panicConfigKey');
+    // Activate features
+    const middlewareService = activateMiddleware(workspaceFolder, middlewareName);
+    const templateService = activateConfig('template');
+    const nanoConfigService = activateConfig('nanoConfigKey');
+    const panicConfigService = activateConfig('panicConfigKey');
+
+    activateDefaultMappersAndEndpoints(viewManager, providerManager, workspaceFolder, middlewareName);
 
     // Register commands
     commandService.registerCommands(viewManager, providerManager);
@@ -67,7 +71,11 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         viewManager,
         providerManager,
-        commandService
+        commandService,
+        middlewareService,
+        templateService,
+        nanoConfigService,
+        panicConfigService
     );
 }
 

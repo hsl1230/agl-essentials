@@ -3,12 +3,16 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { FeatureNode } from '../models/feature-node';
 import { MapperConfig } from '../models/mapper-config';
+import { CONFIG_PREFIX, getFullMiddlewareName } from '../shared';
 import { TreeDataProvider } from './tree-data-provider';
 
 export class MapperTreeDataProvider extends TreeDataProvider {
     private mapperMap: Map<string, MapperConfig> = new Map();
 
-    constructor(private workspaceFolder: string, public readonly middlewareName: string) {
+    constructor(
+        private workspaceFolder: string, 
+        public readonly middlewareName: string
+    ) {
         super();
         this.loadData();
     }
@@ -17,12 +21,18 @@ export class MapperTreeDataProvider extends TreeDataProvider {
         return 'Mappers';
     }
 
-    protected loadData() {
-        const autoMapperConfigPath = path.join(this.workspaceFolder, `agl-config-${this.middlewareName}/files/autoMapperConfig.json`);
+    protected loadData(): void {
+        const autoMapperConfigPath = path.join(
+            this.workspaceFolder, 
+            `${CONFIG_PREFIX}${this.middlewareName}`,
+            'files',
+            'autoMapperConfig.json'
+        );
+        
         try {
             const config = JSON.parse(fs.readFileSync(autoMapperConfigPath, 'utf-8'));
-            this.buildMapperMap(config.mapConfigs); // Populate mapperMap with mapper data
-            this.buildMapperTree(config.mapConfigs); // Build the tree structure
+            this.buildMapperMap(config.mapConfigs);
+            this.buildMapperTree(config.mapConfigs);
         } catch (error: any) {
             vscode.window.showErrorMessage(`Failed to load mapper tree: ${error.message}`);
         }
@@ -32,8 +42,9 @@ export class MapperTreeDataProvider extends TreeDataProvider {
         return this.mapperMap.get(mapperName);
     }
 
-    private buildMapperMap(mapConfigs: any[]) {
-        let fullMiddlewareName = `agl-${this.middlewareName}-middleware`;
+    private buildMapperMap(mapConfigs: any[]): void {
+        const fullMiddlewareName = getFullMiddlewareName(this.middlewareName);
+        
         for (const mapConfig of mapConfigs) {
             let mapConfigFilePath = path.join(this.workspaceFolder, fullMiddlewareName, mapConfig.file);
             if (!mapConfigFilePath.endsWith('.json')) {

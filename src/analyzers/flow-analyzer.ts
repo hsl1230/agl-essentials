@@ -6,6 +6,7 @@ import {
   FlowAnalysisResult,
   MiddlewareAnalysis
 } from '../models/flow-analyzer-types';
+import { getShortPath as sharedGetShortPath } from '../shared';
 import { MiddlewareAnalyzer } from './middleware-analyzer';
 
 /**
@@ -34,53 +35,21 @@ export class FlowAnalyzer {
       const analysis = this.middlewareAnalyzer.analyzeMiddleware(middlewarePath);
       middlewares.push(analysis);
 
-      // Track res.locals producers (writers) - now using aggregated data from all components
-      for (const write of analysis.allResLocalsWrites) {
-        if (!allResLocalsProperties.has(write.property)) {
-          allResLocalsProperties.set(write.property, { producers: [], consumers: [] });
-        }
-        const sourceInfo = write.sourcePath ? `${middlewarePath}::${this.getShortPath(write.sourcePath)}` : middlewarePath;
-        const entry = allResLocalsProperties.get(write.property)!;
-        if (!entry.producers.includes(sourceInfo)) {
-          entry.producers.push(sourceInfo);
-        }
-      }
+      // Track res.locals producers and consumers
+      this.trackPropertyUsage(
+        analysis.allResLocalsWrites,
+        analysis.allResLocalsReads,
+        middlewarePath,
+        allResLocalsProperties
+      );
 
-      // Track res.locals consumers (readers) - now using aggregated data from all components
-      for (const read of analysis.allResLocalsReads) {
-        if (!allResLocalsProperties.has(read.property)) {
-          allResLocalsProperties.set(read.property, { producers: [], consumers: [] });
-        }
-        const sourceInfo = read.sourcePath ? `${middlewarePath}::${this.getShortPath(read.sourcePath)}` : middlewarePath;
-        const entry = allResLocalsProperties.get(read.property)!;
-        if (!entry.consumers.includes(sourceInfo)) {
-          entry.consumers.push(sourceInfo);
-        }
-      }
-
-      // Track req.transaction producers (writers)
-      for (const write of analysis.allReqTransactionWrites) {
-        if (!allReqTransactionProperties.has(write.property)) {
-          allReqTransactionProperties.set(write.property, { producers: [], consumers: [] });
-        }
-        const sourceInfo = write.sourcePath ? `${middlewarePath}::${this.getShortPath(write.sourcePath)}` : middlewarePath;
-        const entry = allReqTransactionProperties.get(write.property)!;
-        if (!entry.producers.includes(sourceInfo)) {
-          entry.producers.push(sourceInfo);
-        }
-      }
-
-      // Track req.transaction consumers (readers)
-      for (const read of analysis.allReqTransactionReads) {
-        if (!allReqTransactionProperties.has(read.property)) {
-          allReqTransactionProperties.set(read.property, { producers: [], consumers: [] });
-        }
-        const sourceInfo = read.sourcePath ? `${middlewarePath}::${this.getShortPath(read.sourcePath)}` : middlewarePath;
-        const entry = allReqTransactionProperties.get(read.property)!;
-        if (!entry.consumers.includes(sourceInfo)) {
-          entry.consumers.push(sourceInfo);
-        }
-      }
+      // Track req.transaction producers and consumers
+      this.trackPropertyUsage(
+        analysis.allReqTransactionWrites,
+        analysis.allReqTransactionReads,
+        middlewarePath,
+        allReqTransactionProperties
+      );
     }
 
     // Build data flow edges
@@ -98,12 +67,46 @@ export class FlowAnalyzer {
   }
 
   /**
+   * Track property usage (producers and consumers)
+   */
+  private trackPropertyUsage(
+    writes: { property: string; sourcePath?: string }[],
+    reads: { property: string; sourcePath?: string }[],
+    middlewarePath: string,
+    properties: Map<string, { producers: string[]; consumers: string[] }>
+  ): void {
+    for (const write of writes) {
+      if (!properties.has(write.property)) {
+        properties.set(write.property, { producers: [], consumers: [] });
+      }
+      const sourceInfo = write.sourcePath 
+        ? `${middlewarePath}::${sharedGetShortPath(write.sourcePath)}` 
+        : middlewarePath;
+      const entry = properties.get(write.property)!;
+      if (!entry.producers.includes(sourceInfo)) {
+        entry.producers.push(sourceInfo);
+      }
+    }
+
+    for (const read of reads) {
+      if (!properties.has(read.property)) {
+        properties.set(read.property, { producers: [], consumers: [] });
+      }
+      const sourceInfo = read.sourcePath 
+        ? `${middlewarePath}::${sharedGetShortPath(read.sourcePath)}` 
+        : middlewarePath;
+      const entry = properties.get(read.property)!;
+      if (!entry.consumers.includes(sourceInfo)) {
+        entry.consumers.push(sourceInfo);
+      }
+    }
+  }
+
+  /**
    * Get short path from full path
    */
   private getShortPath(fullPath: string): string {
-    const parts = fullPath.replace(/\\/g, '/').split('/');
-    // Get last 2-3 parts
-    return parts.slice(-3).join('/');
+    return sharedGetShortPath(fullPath);
   }
 
   /**
@@ -247,39 +250,53 @@ export class FlowAnalyzer {
     const allExternalCallsMap = new Map<string, { call: any, extIdx: number }[]>();
     const seenCalls = new Set<string>(); // Track calls globally to prevent cross-middleware duplicates
     
+    // Map sourcePath to its owning middleware's filePath (for fallback when no visible ancestor found)
+    const sourcePathToMiddlewarePath = new Map<string, string>();
+    
+    // Helper to normalize paths for consistent map keys
+    const normalizePathForKey = (p: string) => p.toLowerCase().replace(/\\/g, '/');
+    
     // Helper function to add an external call to the map
-    const addExternalCallToMap = (call: any, extIdx: number) => {
+    const addExternalCallToMap = (call: any, extIdx: number, mwFilePath?: string) => {
       const sourcePath = call.sourcePath;
       if (!sourcePath) return;
       
-      // Create a unique key for this call: type + template + lineNumber + sourcePath
-      const callKey = `${call.type || ''}:${call.template || ''}:${call.lineNumber || 0}:${sourcePath}`;
+      // Normalize the source path for consistent key
+      const normalizedSourcePath = normalizePathForKey(sourcePath);
+      
+      // Track which middleware this sourcePath belongs to
+      if (mwFilePath && !sourcePathToMiddlewarePath.has(normalizedSourcePath)) {
+        sourcePathToMiddlewarePath.set(normalizedSourcePath, normalizePathForKey(mwFilePath));
+      }
+      
+      // Create a unique key for this call: type + template + lineNumber + normalizedSourcePath
+      const callKey = `${call.type || ''}:${call.template || ''}:${call.lineNumber || 0}:${normalizedSourcePath}`;
       
       // Skip if we've already seen this exact call
       if (seenCalls.has(callKey)) return;
       seenCalls.add(callKey);
       
-      if (!allExternalCallsMap.has(sourcePath)) {
-        allExternalCallsMap.set(sourcePath, []);
+      if (!allExternalCallsMap.has(normalizedSourcePath)) {
+        allExternalCallsMap.set(normalizedSourcePath, []);
       }
-      allExternalCallsMap.get(sourcePath)!.push({ call, extIdx });
+      allExternalCallsMap.get(normalizedSourcePath)!.push({ call, extIdx });
     };
     
     // Helper function to collect external calls ONLY from library components
     // Non-library component calls are already in allExternalCalls
-    const collectLibraryExternalCalls = (components: ComponentAnalysis[]) => {
+    const collectLibraryExternalCalls = (components: ComponentAnalysis[], mwFilePath?: string) => {
       for (const comp of components) {
         // Only collect library component calls (these are filtered from allExternalCalls)
         if (comp.externalCalls) {
           comp.externalCalls.forEach((call, idx) => {
             if (call.isLibrary) {
-              addExternalCallToMap(call, idx);
+              addExternalCallToMap(call, idx, mwFilePath);
             }
           });
         }
         // Recursively collect from children
         if (comp.children && comp.children.length > 0) {
-          collectLibraryExternalCalls(comp.children);
+          collectLibraryExternalCalls(comp.children, mwFilePath);
         }
       }
     };
@@ -287,13 +304,13 @@ export class FlowAnalyzer {
     // First collect from allExternalCalls (the deduplicated list - excludes library calls)
     result.middlewares.forEach((mw, mwIndex) => {
       mw.allExternalCalls.forEach((call, extIdx) => {
-        addExternalCallToMap(call, extIdx);
+        addExternalCallToMap(call, extIdx, mw.filePath);
       });
       
       // Also collect library component external calls
       // These were filtered from allExternalCalls but should show when component is visible
       if (mw.components && mw.components.length > 0) {
-        collectLibraryExternalCalls(mw.components);
+        collectLibraryExternalCalls(mw.components, mw.filePath);
       }
     });
     
@@ -307,7 +324,7 @@ export class FlowAnalyzer {
       mwId: string, 
       prefix: string, 
       isParentExpanded: boolean,
-      lastVisiblePath: string
+      lastVisiblePath: string  // Already normalized
     ) => {
       for (let idx = 0; idx < components.length; idx++) {
         const comp = components[idx];
@@ -320,11 +337,11 @@ export class FlowAnalyzer {
           visibleComponentMap.set(comp.filePath!, compId);
         }
         
-        // Build path-to-ancestor map
-        const currentVisiblePath = isVisible ? comp.filePath! : lastVisiblePath;
+        // Build path-to-ancestor map (use normalized paths for both key and value)
+        const normalizedCompPath = comp.filePath ? comp.filePath.toLowerCase().replace(/\\/g, '/') : '';
+        const currentVisiblePath = isVisible ? normalizedCompPath : lastVisiblePath;
         if (comp.filePath) {
-          const normalizedPath = comp.filePath.toLowerCase().replace(/\\/g, '/');
-          pathToVisibleAncestorMap.set(normalizedPath, currentVisiblePath);
+          pathToVisibleAncestorMap.set(normalizedCompPath, currentVisiblePath);
         }
         
         // Recursively process children
@@ -351,10 +368,16 @@ export class FlowAnalyzer {
       if (mw.filePath) {
         visibleFilePaths.add(mw.filePath);
         visibleComponentMap.set(mw.filePath, mwId);
+        // Also add middleware filePath to ancestor map (points to itself since it's always visible)
+        // Use normalized path for both key and value
+        const normalizedMwPath = mw.filePath.toLowerCase().replace(/\\/g, '/');
+        pathToVisibleAncestorMap.set(normalizedMwPath, normalizedMwPath);
       }
       
       if (mw.components.length > 0) {
-        collectVisibleAndBuildAncestorMap(mw.components, mwId, '', isMwExpanded, mw.filePath);
+        // Pass normalized path as lastVisiblePath
+        const normalizedMwPath = mw.filePath ? mw.filePath.toLowerCase().replace(/\\/g, '/') : '';
+        collectVisibleAndBuildAncestorMap(mw.components, mwId, '', isMwExpanded, normalizedMwPath);
       }
     });
     
@@ -371,9 +394,16 @@ export class FlowAnalyzer {
     // Assign each external call to the deepest visible component
     // For library calls: if source is not visible, do NOT bubble (discard)
     // For application calls: if source is not visible, bubble to visible ancestor
-    allExternalCallsMap.forEach((calls, sourcePath) => {
+    
+    // Create normalized version of visibleFilePaths for consistent lookup
+    // (reuse normalizePathForKey from above)
+    const normalizedVisibleFilePaths = new Set<string>();
+    visibleFilePaths.forEach(p => normalizedVisibleFilePaths.add(normalizePathForKey(p)));
+    
+    allExternalCallsMap.forEach((calls, normalizedSourcePath) => {
+      // sourcePath is already normalized (key of allExternalCallsMap)
       // Check if the source path is visible
-      const isSourceVisible = visibleFilePaths.has(sourcePath);
+      const isSourceVisible = normalizedVisibleFilePaths.has(normalizedSourcePath);
       
       // Filter calls based on visibility and library status
       const callsToAssign: { call: any, extIdx: number }[] = [];
@@ -395,24 +425,41 @@ export class FlowAnalyzer {
         return;
       }
       
-      // If the source path is visible, assign directly
+      // If the source path is visible, assign directly (using normalized path as key)
       if (isSourceVisible) {
-        if (!effectiveExternalCallsMap.has(sourcePath)) {
-          effectiveExternalCallsMap.set(sourcePath, []);
+        if (!effectiveExternalCallsMap.has(normalizedSourcePath)) {
+          effectiveExternalCallsMap.set(normalizedSourcePath, []);
         }
-        effectiveExternalCallsMap.get(sourcePath)!.push(...callsToAssign);
+        effectiveExternalCallsMap.get(normalizedSourcePath)!.push(...callsToAssign);
         return;
       }
       
       // If the source path is not visible, find visible ancestor using the pre-built map
       // This is O(1) lookup instead of O(n) tree traversal
-      const deepestVisible = findVisibleAncestorFast(sourcePath);
+      // Note: normalizedSourcePath is already normalized, so we can use it directly
+      const deepestVisible = findVisibleAncestorFast(normalizedSourcePath);
       
       if (deepestVisible) {
-        if (!effectiveExternalCallsMap.has(deepestVisible)) {
-          effectiveExternalCallsMap.set(deepestVisible, []);
+        // Use normalized path as key for consistency
+        const normalizedDeepestVisible = normalizePathForKey(deepestVisible);
+        if (!effectiveExternalCallsMap.has(normalizedDeepestVisible)) {
+          effectiveExternalCallsMap.set(normalizedDeepestVisible, []);
         }
-        effectiveExternalCallsMap.get(deepestVisible)!.push(...callsToAssign);
+        effectiveExternalCallsMap.get(normalizedDeepestVisible)!.push(...callsToAssign);
+      } else {
+        // Fallback: if no visible ancestor found in the pre-built map,
+        // the source is likely from a component beyond MAX_DEPTH limit.
+        // Try to fall back to the owning middleware's path.
+        const mwPath = sourcePathToMiddlewarePath.get(normalizedSourcePath);
+        if (mwPath) {
+          // Check if middleware path is in effectiveExternalCallsMap or should be added
+          if (!effectiveExternalCallsMap.has(mwPath)) {
+            effectiveExternalCallsMap.set(mwPath, []);
+          }
+          effectiveExternalCallsMap.get(mwPath)!.push(...callsToAssign);
+        }
+        // If no middleware path found either, the calls are silently discarded
+        // (this shouldn't happen if data is consistent)
       }
     });
 
@@ -440,7 +487,8 @@ export class FlowAnalyzer {
       }
 
       // Get middleware's direct external calls (from effectiveExternalCallsMap)
-      const mwExternalCalls = mw.filePath ? effectiveExternalCallsMap.get(mw.filePath) : [];
+      // Use normalized path for consistent lookup
+      const mwExternalCalls = mw.filePath ? effectiveExternalCallsMap.get(normalizePathForKey(mw.filePath)) : [];
 
       // Build labels - toggle symbol goes on the main node (inside subgraph), not on subgraph title
       const mwLabel = `${index + 1}. ${shortName}`;
@@ -553,6 +601,9 @@ export class FlowAnalyzer {
     externalCallsMap?: Map<string, { call: any, extIdx: number }[]>,
     extIdToCallMap?: Map<string, any>
   ): string {
+    // Helper to normalize paths for map lookup
+    const normalizePath = (p: string) => p.toLowerCase().replace(/\\/g, '/');
+    
     components.forEach((comp, idx) => {
       const compId = prefix ? `${prefix}_c${idx}` : `${mwId}_c${idx}`;
       const hasWrites = comp.resLocalsWrites.length > 0;
@@ -565,8 +616,10 @@ export class FlowAnalyzer {
         visibleComponentMap.set(comp.filePath, compId);
       }
       
-      // Get external calls for this component
-      const compExternalCalls = comp.filePath && externalCallsMap ? externalCallsMap.get(comp.filePath) : [];
+      // Get external calls for this component (using normalized path for lookup)
+      const compExternalCalls = comp.filePath && externalCallsMap 
+        ? externalCallsMap.get(normalizePath(comp.filePath)) 
+        : [];
       
       // Determine node class based on data operations
       let nodeClass = ':::component';

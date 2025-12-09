@@ -363,67 +363,11 @@ export class FlowAnalyzerPanel extends AbstractPanel {
     const info = this.currentResult.allResLocalsProperties.get(property);
     if (!info) return;
 
-    // Find all usages across middlewares and their components
-    const usages: any[] = [];
-    const seenKeys = new Set<string>(); // Prevent duplicates from multi-referenced components
-    const seenFilePaths = new Set<string>(); // Track visited file paths
-    
-    const collectUsages = (source: any, sourceName: string, isComponent: boolean) => {
-      // Skip if we've already processed this component
-      if (isComponent && seenFilePaths.has(source.filePath)) {
-        return;
-      }
-      if (isComponent) {
-        seenFilePaths.add(source.filePath);
-      }
-
-      const writes = source.resLocalsWrites?.filter((w: any) => w.property === property) || [];
-      const reads = source.resLocalsReads?.filter((r: any) => r.property === property) || [];
-
-      writes.forEach((w: any) => {
-        const key = `${source.filePath}:${w.lineNumber}:write`;
-        if (seenKeys.has(key)) return;
-        seenKeys.add(key);
-        
-        usages.push({
-          source: sourceName,
-          filePath: source.filePath,
-          isComponent,
-          isLibrary: w.isLibrary,
-          type: 'write',
-          lineNumber: w.lineNumber,
-          codeSnippet: w.codeSnippet
-        });
-      });
-
-      reads.forEach((r: any) => {
-        const key = `${source.filePath}:${r.lineNumber}:read`;
-        if (seenKeys.has(key)) return;
-        seenKeys.add(key);
-        
-        usages.push({
-          source: sourceName,
-          filePath: source.filePath,
-          isComponent,
-          isLibrary: r.isLibrary,
-          type: 'read',
-          lineNumber: r.lineNumber,
-          codeSnippet: r.codeSnippet
-        });
-      });
-    };
-
-    const collectFromComponents = (components: any[], parentName: string) => {
-      for (const comp of components) {
-        collectUsages(comp, `${parentName} → ${comp.displayName}`, true);
-        collectFromComponents(comp.children, `${parentName} → ${comp.displayName}`);
-      }
-    };
-
-    this.currentResult.middlewares.forEach(mw => {
-      collectUsages(mw, mw.name, false);
-      collectFromComponents(mw.components, mw.name);
-    });
+    const usages = this.collectPropertyUsages(
+      property, 
+      'resLocalsWrites', 
+      'resLocalsReads'
+    );
 
     this.panel?.webview.postMessage({
       command: 'propertyUsages',
@@ -442,13 +386,39 @@ export class FlowAnalyzerPanel extends AbstractPanel {
     const info = this.currentResult.allReqTransactionProperties.get(property);
     if (!info) return;
 
-    // Find all usages across middlewares and their components
+    const usages = this.collectPropertyUsages(
+      property, 
+      'reqTransactionWrites', 
+      'reqTransactionReads'
+    );
+
+    this.panel?.webview.postMessage({
+      command: 'reqTransactionUsages',
+      content: {
+        property,
+        producers: info.producers,
+        consumers: info.consumers,
+        usages
+      }
+    });
+  }
+
+  /**
+   * Collect property usages across middlewares and components
+   * Used by both trackProperty and trackReqTransaction
+   */
+  private collectPropertyUsages(
+    property: string,
+    writesKey: string,
+    readsKey: string
+  ): any[] {
+    if (!this.currentResult) return [];
+
     const usages: any[] = [];
-    const seenKeys = new Set<string>(); // Prevent duplicates from multi-referenced components
-    const seenFilePaths = new Set<string>(); // Track visited file paths
+    const seenKeys = new Set<string>();
+    const seenFilePaths = new Set<string>();
     
     const collectUsages = (source: any, sourceName: string, isComponent: boolean) => {
-      // Skip if we've already processed this component
       if (isComponent && seenFilePaths.has(source.filePath)) {
         return;
       }
@@ -456,8 +426,8 @@ export class FlowAnalyzerPanel extends AbstractPanel {
         seenFilePaths.add(source.filePath);
       }
 
-      const writes = source.reqTransactionWrites?.filter((w: any) => w.property === property) || [];
-      const reads = source.reqTransactionReads?.filter((r: any) => r.property === property) || [];
+      const writes = source[writesKey]?.filter((w: any) => w.property === property) || [];
+      const reads = source[readsKey]?.filter((r: any) => r.property === property) || [];
 
       writes.forEach((w: any) => {
         const key = `${source.filePath}:${w.lineNumber}:write`;
@@ -504,15 +474,7 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       collectFromComponents(mw.components, mw.name);
     });
 
-    this.panel?.webview.postMessage({
-      command: 'reqTransactionUsages',
-      content: {
-        property,
-        producers: info.producers,
-        consumers: info.consumers,
-        usages
-      }
-    });
+    return usages;
   }
 
   private async openConfigFile(configType: string, configKey?: string): Promise<void> {

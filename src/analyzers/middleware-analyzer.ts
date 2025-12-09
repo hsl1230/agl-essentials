@@ -10,6 +10,27 @@ import {
   RequireInfo,
   ResLocalsUsage
 } from '../models/flow-analyzer-types';
+import { normalizePath, isLibraryPath as sharedIsLibraryPath } from '../shared';
+
+/**
+ * Array mutation methods used for detecting writes
+ */
+const MUTATION_METHODS = [
+  'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin',
+  'set', 'add', 'delete', 'clear'
+] as const;
+
+const MUTATION_METHODS_PATTERN = new RegExp(`\\.(${MUTATION_METHODS.join('|')})$`);
+
+/**
+ * Native JavaScript methods/properties to skip when analyzing data usage
+ */
+const NATIVE_METHODS_AND_PROPS = [
+  'length', 'indexOf', 'find', 'findIndex', 'filter', 'map', 'reduce', 'reduceRight',
+  'forEach', 'some', 'every', 'includes', 'slice', 'concat', 'join', 'flat', 'flatMap',
+  'keys', 'values', 'entries', 'at', 'toString', 'toLocaleString', 'constructor',
+  'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'valueOf'
+] as const;
 
 /**
  * Analyzes middleware source code to extract:
@@ -31,30 +52,15 @@ export class MiddlewareAnalyzer {
     private workspaceFolder: string,
     private middlewareName: string
   ) {
-    // Normalize path for Windows: convert /c/... to C:/...
-    this.normalizedWorkspaceFolder = this.normalizePath(workspaceFolder);
-  }
-
-  /**
-   * Normalize path for cross-platform compatibility
-   * Converts Git Bash style /c/... to Windows style C:/...
-   */
-  private normalizePath(p: string): string {
-    // Convert /c/Users/... to C:/Users/...
-    if (/^\/[a-zA-Z]\//.test(p)) {
-      return p.replace(/^\/([a-zA-Z])\//, '$1:/');
-    }
-    return p;
+    this.normalizedWorkspaceFolder = normalizePath(workspaceFolder);
   }
 
   private get middlewareRoot(): string {
     return path.join(this.normalizedWorkspaceFolder, `agl-${this.middlewareName}-middleware`);
   }
 
-
   /**
    * Get node_modules path for @opus modules
-   * Falls back to middleware project's node_modules if workspace-level libraries don't exist
    */
   private getNodeModulesAglPath(moduleName: string): string {
     return path.join(this.middlewareRoot, 'node_modules', '@opus', moduleName);
@@ -65,13 +71,11 @@ export class MiddlewareAnalyzer {
    * If not, use node_modules path (installed dependency mode)
    */
   private getAglModuleRoot(moduleName: string): string | undefined {
-    // First try workspace-level (development mode)
     const workspacePath = path.join(this.normalizedWorkspaceFolder, moduleName);
     if (fs.existsSync(workspacePath)) {
       return workspacePath;
     }
     
-    // Fall back to node_modules (installed dependency mode)
     const nodeModulesPath = this.getNodeModulesAglPath(moduleName);
     if (fs.existsSync(nodeModulesPath)) {
       return nodeModulesPath;
@@ -81,35 +85,10 @@ export class MiddlewareAnalyzer {
   }
 
   /**
-   * Check if a file path belongs to a low-level library (agl-core, agl-utils, etc.)
-   * These files contain infrastructure code rather than business logic
-   * Supports both workspace-level paths (agl-core/...) and node_modules paths (node_modules/@opus/agl-core/...)
+   * Check if a file path belongs to a low-level library
    */
   private isLibraryPath(filePath: string): boolean {
-    if (!filePath) return false;
-    
-    const libraryPatterns = [
-      // agl-utils - entire module is infrastructure
-      // Require path separator before module name to avoid matching 'abc_agl-utils'
-      /[/\\]agl-utils[/\\]/i,
-      
-      // agl-core - entire module is infrastructure
-      /[/\\]agl-core[/\\]/i,
-      
-      // agl-cache - entire module is infrastructure
-      /[/\\]agl-cache[/\\]/i,
-      
-      // agl-logger - entire module is infrastructure
-      /[/\\]agl-logger[/\\]/i,
-      
-      // Local utils/wrapper in middleware projects
-      /utils[/\\]wrapper[/\\]/i,
-      
-      // Shared utility files in middleware projects
-      /shared[/\\].*[/\\](wrapper|request|http)/i,
-    ];
-    
-    return libraryPatterns.some(pattern => pattern.test(filePath));
+    return sharedIsLibraryPath(filePath);
   }
 
   /**
@@ -685,7 +664,6 @@ export class MiddlewareAnalyzer {
   }
 
   private analyzeResLocals(lines: string[], reads: ResLocalsUsage[], writes: ResLocalsUsage[], sourcePath: string): void {
-    // Check if this is a library file - we still analyze it but mark the results
     const isLibrary = this.isLibraryPath(sourcePath);
 
     // Support both res.locals and response.locals
@@ -698,20 +676,13 @@ export class MiddlewareAnalyzer {
     // Pre-populate sets with existing entries
     writes.forEach(w => seenWrites.add(`${w.property}:${w.lineNumber}:${w.sourcePath}`));
     reads.forEach(r => seenReads.add(`${r.property}:${r.lineNumber}:${r.sourcePath}`));
-    
-    // List of mutation methods that modify the object/array they're called on
-    const mutationMethods = [
-      'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin',
-      'set', 'add', 'delete', 'clear'
-    ];
-    const mutationMethodsPattern = new RegExp(`\\.(${mutationMethods.join('|')})$`);
 
     lines.forEach((line, index) => {
       const lineNumber = index + 1;
       let match;
       resLocalsPattern.lastIndex = 0;
 
-      // Check for delete statement: delete res.locals.xxx or delete response.locals.xxx
+      // Check for delete statement
       const deleteMatch = line.match(/delete\s+(?:res|response)\.locals\.(\w+(?:\.\w+)*)/);
       if (deleteMatch) {
         const property = deleteMatch[1];
@@ -737,49 +708,28 @@ export class MiddlewareAnalyzer {
         const afterMatch = line.substring(matchIndex + match[0].length);
         const beforeMatch = line.substring(0, matchIndex);
 
-        // Skip if this was already captured as a delete operation (support both res and response)
+        // Skip if this was already captured as a delete operation
         if (/delete\s+(?:res|response)\.locals\.\w*$/.test(beforeMatch) || /delete\s+$/.test(beforeMatch)) continue;
 
         // Handle mutation methods captured in property name
         let isMutationMethodCall = false;
-        const methodMatch = property.match(mutationMethodsPattern);
+        const methodMatch = property.match(MUTATION_METHODS_PATTERN);
         if (methodMatch && /^\s*\(/.test(afterMatch)) {
           isMutationMethodCall = true;
           property = property.substring(0, property.length - methodMatch[0].length);
         }
         
         // Skip JavaScript native array/object methods and properties
-        // These are not actual data properties set by the application
-        const nativeMethodsAndProps = [
-          'length', 'indexOf', 'find', 'findIndex', 'filter', 'map', 'reduce', 'reduceRight',
-          'forEach', 'some', 'every', 'includes', 'slice', 'concat', 'join', 'flat', 'flatMap',
-          'keys', 'values', 'entries', 'at', 'toString', 'toLocaleString', 'constructor',
-          'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'valueOf'
-        ];
-        
-        // Check if the property ends with a native method/property being called or accessed
         const propertyParts = property.split('.');
         const lastPart = propertyParts[propertyParts.length - 1];
-        if (nativeMethodsAndProps.includes(lastPart)) {
-          // Remove the native method/property part to get the actual data property
+        if (NATIVE_METHODS_AND_PROPS.includes(lastPart as typeof NATIVE_METHODS_AND_PROPS[number])) {
           propertyParts.pop();
-          if (propertyParts.length === 0) continue; // Skip if only native method
+          if (propertyParts.length === 0) continue;
           property = propertyParts.join('.');
         }
 
         // Determine if write operation
-        const isSpreadRead = /\.\.\.\s*$/.test(beforeMatch);
-        const isWrite = !isSpreadRead && (
-          isMutationMethodCall ||
-          /^\s*=(?!=)/.test(afterMatch) ||                    // direct assignment
-          /^\s*\[[^\]]*\]\s*=(?!=)/.test(afterMatch) ||       // indexed assignment
-          /^\s*\.\w+\s*=(?!=)/.test(afterMatch) ||            // property assignment
-          /^\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // compound assignment
-          /^\s*\[[^\]]*\]\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // indexed compound
-          /^\s*\.(push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin)\s*\(/.test(afterMatch) ||  // array mutation
-          /^\s*\.(set|add|delete|clear)\s*\(/.test(afterMatch) ||  // Map/Set mutation
-          /Object\.assign\s*\(\s*$/.test(beforeMatch)         // Object.assign target
-        );
+        const isWrite = this.isWriteOperation(beforeMatch, afterMatch, isMutationMethodCall);
 
         const key = `${property}:${lineNumber}:${sourcePath}`;
         
@@ -817,6 +767,24 @@ export class MiddlewareAnalyzer {
         }
       }
     });
+  }
+
+  /**
+   * Determines if an operation is a write based on context
+   */
+  private isWriteOperation(beforeMatch: string, afterMatch: string, isMutationMethodCall: boolean): boolean {
+    const isSpreadRead = /\.\.\.\s*$/.test(beforeMatch);
+    return !isSpreadRead && (
+      isMutationMethodCall ||
+      /^\s*=(?!=)/.test(afterMatch) ||                    // direct assignment
+      /^\s*\[[^\]]*\]\s*=(?!=)/.test(afterMatch) ||       // indexed assignment
+      /^\s*\.\w+\s*=(?!=)/.test(afterMatch) ||            // property assignment
+      /^\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // compound assignment
+      /^\s*\[[^\]]*\]\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // indexed compound
+      /^\s*\.(push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin)\s*\(/.test(afterMatch) ||  // array mutation
+      /^\s*\.(set|add|delete|clear)\s*\(/.test(afterMatch) ||  // Map/Set mutation
+      /Object\.assign\s*\(\s*$/.test(beforeMatch)         // Object.assign target
+    );
   }
 
   /**
@@ -929,13 +897,6 @@ export class MiddlewareAnalyzer {
     writes.forEach(w => seenWrites.add(`${w.property}:${w.lineNumber}:${w.sourcePath}`));
     reads.forEach(r => seenReads.add(`${r.property}:${r.lineNumber}:${r.sourcePath}`));
     
-    // List of mutation methods that modify the object/array they're called on
-    const mutationMethods = [
-      'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin',
-      'set', 'add', 'delete', 'clear'
-    ];
-    const mutationMethodsPattern = new RegExp(`\\.(${mutationMethods.join('|')})$`);
-    
     // Pattern to detect logger calls - skip these for direct req.transaction usage
     const loggerCallPattern = /logger\.(info|warn|error|debug|trace|fatal|log)\s*\([^)]*$/;
 
@@ -943,7 +904,7 @@ export class MiddlewareAnalyzer {
       const lineNumber = index + 1;
       let match;
       
-      // Check for delete statement: delete req.transaction.xxx or delete request.transaction.xxx
+      // Check for delete statement
       const deleteMatch = line.match(/delete\s+(?:req|request)\.transaction\.(\w+(?:\.\w+)*)/);
       if (deleteMatch) {
         const property = deleteMatch[1];
@@ -971,30 +932,19 @@ export class MiddlewareAnalyzer {
         const afterMatch = line.substring(matchIndex + match[0].length);
         const beforeMatch = line.substring(0, matchIndex);
 
-        // Skip if this was already captured as a delete operation (support both req and request)
+        // Skip if this was already captured as a delete operation
         if (/delete\s+(?:req|request)\.transaction\.\w*$/.test(beforeMatch) || /delete\s+$/.test(beforeMatch)) continue;
 
         // Handle mutation methods captured in property name
         let isMutationMethodCall = false;
-        const methodMatch = property.match(mutationMethodsPattern);
+        const methodMatch = property.match(MUTATION_METHODS_PATTERN);
         if (methodMatch && /^\s*\(/.test(afterMatch)) {
           isMutationMethodCall = true;
           property = property.substring(0, property.length - methodMatch[0].length);
         }
 
-        // Determine if write operation
-        const isSpreadRead = /\.\.\.\s*$/.test(beforeMatch);
-        const isWrite = !isSpreadRead && (
-          isMutationMethodCall ||
-          /^\s*=(?!=)/.test(afterMatch) ||                    // direct assignment
-          /^\s*\[[^\]]*\]\s*=(?!=)/.test(afterMatch) ||       // indexed assignment
-          /^\s*\.\w+\s*=(?!=)/.test(afterMatch) ||            // property assignment
-          /^\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // compound assignment
-          /^\s*\[[^\]]*\]\s*(\+\+|--|[+\-*/%]?=(?!=)|\*\*=)/.test(afterMatch) ||  // indexed compound
-          /^\s*\.(push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin)\s*\(/.test(afterMatch) ||  // array mutation
-          /^\s*\.(set|add|delete|clear)\s*\(/.test(afterMatch) ||  // Map/Set mutation
-          /Object\.assign\s*\(\s*$/.test(beforeMatch)         // Object.assign target
-        );
+        // Determine if write operation using shared helper
+        const isWrite = this.isWriteOperation(beforeMatch, afterMatch, isMutationMethodCall);
 
         const key = `${property}:${lineNumber}:${sourcePath}`;
         
@@ -1041,15 +991,13 @@ export class MiddlewareAnalyzer {
         const afterMatch = line.substring(matchIndex + match[0].length);
         const codeSnippet = line.trim();
         
-        // Skip if this is a logger call - check if beforeMatch contains logger.xxx( pattern
+        // Skip if this is a logger call
         if (loggerCallPattern.test(beforeMatch)) {
           continue;
         }
         
         // Also skip if it's passed as argument to any function and looks like logging context
-        // e.g., someFunction(..., req.transaction) at end of call
         if (/,\s*$/.test(beforeMatch) && /^\s*\)/.test(afterMatch)) {
-          // Check if it's a logger call by looking back further
           if (/logger\.\w+\s*\(/.test(line)) {
             continue;
           }
@@ -1061,8 +1009,8 @@ export class MiddlewareAnalyzer {
         
         // Determine if write operation
         const isWrite = (
-          /^\s*=(?!=)/.test(afterMatch) ||                    // direct assignment: req.transaction = {...}
-          /Object\.assign\s*\(\s*$/.test(beforeMatch)         // Object.assign target
+          /^\s*=(?!=)/.test(afterMatch) ||
+          /Object\.assign\s*\(\s*$/.test(beforeMatch)
         );
         
         if (isWrite) {
