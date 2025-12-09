@@ -1238,6 +1238,16 @@ body {
     color: var(--accent-blue);
 }
 
+.badge.trans-write {
+    background-color: rgba(197, 134, 192, 0.2);
+    color: var(--accent-purple, #c586c0);
+}
+
+.badge.trans-read {
+    background-color: rgba(156, 220, 254, 0.2);
+    color: var(--accent-cyan, #9cdcfe);
+}
+
 .badge.data {
     background-color: rgba(220, 220, 170, 0.2);
     color: var(--accent-yellow);
@@ -1662,5 +1672,112 @@ body {
     font-size: 12px;
     color: var(--text-secondary);
     padding: 4px 0;
+}
+
+/* Grouped usages in floating panel */
+.floating-usage-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.usage-file-group {
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.usage-file-group.library-group {
+    opacity: 0.8;
+    border-color: var(--text-muted);
+}
+
+.usage-file-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background-color: var(--bg-tertiary);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.usage-file-header:hover {
+    background-color: var(--bg-hover);
+}
+
+.usage-file-header.expanded {
+    border-bottom: 1px solid var(--border-color);
+}
+
+.usage-file-header .group-toggle {
+    font-size: 10px;
+    color: var(--text-muted);
+    width: 12px;
+    transition: transform 0.15s ease;
+}
+
+.usage-file-header .group-file-name {
+    flex: 1;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.usage-file-header .group-counts {
+    display: flex;
+    gap: 6px;
+    font-size: 11px;
+}
+
+.usage-file-header .group-counts .write-count {
+    color: var(--accent-green);
+}
+
+.usage-file-header .group-counts .read-count {
+    color: var(--accent-blue);
+}
+
+.usage-file-content {
+    padding: 4px;
+    background-color: var(--bg-secondary);
+}
+
+.usage-file-content .floating-usage-item {
+    margin: 4px;
+    padding: 6px 10px;
+}
+
+.usage-file-content .floating-usage-item .usage-snippet {
+    flex: 1;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.library-section-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    margin-top: 8px;
+}
+
+.library-section-header .separator-line {
+    flex: 1;
+    height: 1px;
+    background-color: var(--border-color);
+}
+
+.library-section-header .separator-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
 }
 

@@ -149,25 +149,27 @@ export class FlowAnalyzerPanel extends AbstractPanel {
   /**
    * Serialize components recursively
    */
-  private serializeComponents(components: any[]): any[] {
-    return components.map(comp => ({
-      name: comp.name,
-      displayName: comp.displayName,
-      filePath: comp.filePath,
-      exists: comp.exists,
-      depth: comp.depth,
-      parentPath: comp.parentPath,
-      resLocalsReads: comp.resLocalsReads,
-      resLocalsWrites: comp.resLocalsWrites,
-      reqTransactionReads: comp.reqTransactionReads,
-      reqTransactionWrites: comp.reqTransactionWrites,
-      dataUsages: comp.dataUsages || [],
-      externalCalls: comp.externalCalls,
-      configDeps: comp.configDeps,
-      exportedFunctions: comp.exportedFunctions,
-      mainFunctionLine: comp.mainFunctionLine,
-      children: this.serializeComponents(comp.children)
-    }));
+  private serializeComponents(components: any[], depth: number = 0): any[] {
+    return components.map(comp => {
+      return {
+        name: comp.name,
+        displayName: comp.displayName,
+        filePath: comp.filePath,
+        exists: comp.exists,
+        depth: comp.depth,
+        parentPath: comp.parentPath,
+        resLocalsReads: comp.resLocalsReads,
+        resLocalsWrites: comp.resLocalsWrites,
+        reqTransactionReads: comp.reqTransactionReads,
+        reqTransactionWrites: comp.reqTransactionWrites,
+        dataUsages: comp.dataUsages || [],
+        externalCalls: comp.externalCalls,
+        configDeps: comp.configDeps,
+        exportedFunctions: comp.exportedFunctions,
+        mainFunctionLine: comp.mainFunctionLine,
+        children: this.serializeComponents(comp.children, depth + 1)
+      };
+    });
   }
 
   protected getMessageHandler(featureArg: any): (msg: any) => void {
@@ -355,16 +357,31 @@ export class FlowAnalyzerPanel extends AbstractPanel {
 
     // Find all usages across middlewares and their components
     const usages: any[] = [];
+    const seenKeys = new Set<string>(); // Prevent duplicates from multi-referenced components
+    const seenFilePaths = new Set<string>(); // Track visited file paths
     
     const collectUsages = (source: any, sourceName: string, isComponent: boolean) => {
+      // Skip if we've already processed this component
+      if (isComponent && seenFilePaths.has(source.filePath)) {
+        return;
+      }
+      if (isComponent) {
+        seenFilePaths.add(source.filePath);
+      }
+
       const writes = source.resLocalsWrites?.filter((w: any) => w.property === property) || [];
       const reads = source.resLocalsReads?.filter((r: any) => r.property === property) || [];
 
       writes.forEach((w: any) => {
+        const key = `${source.filePath}:${w.lineNumber}:write`;
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
+        
         usages.push({
           source: sourceName,
           filePath: source.filePath,
           isComponent,
+          isLibrary: w.isLibrary,
           type: 'write',
           lineNumber: w.lineNumber,
           codeSnippet: w.codeSnippet
@@ -372,10 +389,15 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       });
 
       reads.forEach((r: any) => {
+        const key = `${source.filePath}:${r.lineNumber}:read`;
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
+        
         usages.push({
           source: sourceName,
           filePath: source.filePath,
           isComponent,
+          isLibrary: r.isLibrary,
           type: 'read',
           lineNumber: r.lineNumber,
           codeSnippet: r.codeSnippet
@@ -414,16 +436,31 @@ export class FlowAnalyzerPanel extends AbstractPanel {
 
     // Find all usages across middlewares and their components
     const usages: any[] = [];
+    const seenKeys = new Set<string>(); // Prevent duplicates from multi-referenced components
+    const seenFilePaths = new Set<string>(); // Track visited file paths
     
     const collectUsages = (source: any, sourceName: string, isComponent: boolean) => {
+      // Skip if we've already processed this component
+      if (isComponent && seenFilePaths.has(source.filePath)) {
+        return;
+      }
+      if (isComponent) {
+        seenFilePaths.add(source.filePath);
+      }
+
       const writes = source.reqTransactionWrites?.filter((w: any) => w.property === property) || [];
       const reads = source.reqTransactionReads?.filter((r: any) => r.property === property) || [];
 
       writes.forEach((w: any) => {
+        const key = `${source.filePath}:${w.lineNumber}:write`;
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
+        
         usages.push({
           source: sourceName,
           filePath: source.filePath,
           isComponent,
+          isLibrary: w.isLibrary,
           type: 'write',
           lineNumber: w.lineNumber,
           codeSnippet: w.codeSnippet
@@ -431,10 +468,15 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       });
 
       reads.forEach((r: any) => {
+        const key = `${source.filePath}:${r.lineNumber}:read`;
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
+        
         usages.push({
           source: sourceName,
           filePath: source.filePath,
           isComponent,
+          isLibrary: r.isLibrary,
           type: 'read',
           lineNumber: r.lineNumber,
           codeSnippet: r.codeSnippet

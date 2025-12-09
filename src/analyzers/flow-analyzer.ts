@@ -243,25 +243,54 @@ export class FlowAnalyzer {
     const allExternalCallsMap = new Map<string, { call: any, extIdx: number }[]>();
     const seenCalls = new Set<string>(); // Track calls globally to prevent cross-middleware duplicates
     
+    // Helper function to add an external call to the map
+    const addExternalCallToMap = (call: any, extIdx: number) => {
+      const sourcePath = call.sourcePath;
+      if (!sourcePath) return;
+      
+      // Create a unique key for this call: type + template + lineNumber + sourcePath
+      const callKey = `${call.type || ''}:${call.template || ''}:${call.lineNumber || 0}:${sourcePath}`;
+      
+      // Skip if we've already seen this exact call
+      if (seenCalls.has(callKey)) return;
+      seenCalls.add(callKey);
+      
+      if (!allExternalCallsMap.has(sourcePath)) {
+        allExternalCallsMap.set(sourcePath, []);
+      }
+      allExternalCallsMap.get(sourcePath)!.push({ call, extIdx });
+    };
+    
+    // Helper function to collect external calls ONLY from library components
+    // Non-library component calls are already in allExternalCalls
+    const collectLibraryExternalCalls = (components: ComponentAnalysis[]) => {
+      for (const comp of components) {
+        // Only collect library component calls (these are filtered from allExternalCalls)
+        if (comp.externalCalls) {
+          comp.externalCalls.forEach((call, idx) => {
+            if (call.isLibrary) {
+              addExternalCallToMap(call, idx);
+            }
+          });
+        }
+        // Recursively collect from children
+        if (comp.children && comp.children.length > 0) {
+          collectLibraryExternalCalls(comp.children);
+        }
+      }
+    };
+    
+    // First collect from allExternalCalls (the deduplicated list - excludes library calls)
     result.middlewares.forEach((mw, mwIndex) => {
       mw.allExternalCalls.forEach((call, extIdx) => {
-        const sourcePath = call.sourcePath || mw.filePath;
-        if (sourcePath) {
-          // Create a unique key for this call: type + template + lineNumber + sourcePath
-          const callKey = `${call.type || ''}:${call.template || ''}:${call.lineNumber || 0}:${sourcePath}`;
-          
-          // Skip if we've already seen this exact call
-          if (seenCalls.has(callKey)) {
-            return;
-          }
-          seenCalls.add(callKey);
-          
-          if (!allExternalCallsMap.has(sourcePath)) {
-            allExternalCallsMap.set(sourcePath, []);
-          }
-          allExternalCallsMap.get(sourcePath)!.push({ call, extIdx });
-        }
+        addExternalCallToMap(call, extIdx);
       });
+      
+      // Also collect library component external calls
+      // These were filtered from allExternalCalls but should show when component is visible
+      if (mw.components && mw.components.length > 0) {
+        collectLibraryExternalCalls(mw.components);
+      }
     });
 
     // First pass: collect all visible components
@@ -354,11 +383,34 @@ export class FlowAnalyzer {
     };
     
     // Assign each external call to the deepest visible component
+    // For library calls: if source is not visible, do NOT bubble (discard)
+    // For application calls: if source is not visible, bubble to visible ancestor
     allExternalCallsMap.forEach((calls, sourcePath) => {
+      // Check if the source path is visible
+      const isSourceVisible = visibleFilePaths.has(sourcePath);
+      
+      // Filter calls based on visibility and library status
+      const callsToAssign: { call: any, extIdx: number }[] = [];
+      
+      for (const callInfo of calls) {
+        const isLibraryCall = callInfo.call.isLibrary;
+        
+        if (isSourceVisible) {
+          // Source is visible - always show the call
+          callsToAssign.push(callInfo);
+        } else if (!isLibraryCall) {
+          // Source is not visible, but it's an application call - will bubble
+          callsToAssign.push(callInfo);
+        }
+        // Library calls with non-visible source are discarded (not bubbled)
+      }
+      
+      if (callsToAssign.length === 0) return;
+      
       let assignedPath = sourcePath;
       
-      // If the source path is visible, use it directly
-      if (!visibleFilePaths.has(sourcePath)) {
+      // If the source path is not visible, find visible ancestor for application calls
+      if (!isSourceVisible) {
         // Find which middleware this path belongs to
         for (let mwIndex = 0; mwIndex < result.middlewares.length; mwIndex++) {
           const mw = result.middlewares[mwIndex];
@@ -383,7 +435,7 @@ export class FlowAnalyzer {
       if (!effectiveExternalCallsMap.has(assignedPath)) {
         effectiveExternalCallsMap.set(assignedPath, []);
       }
-      effectiveExternalCallsMap.get(assignedPath)!.push(...calls);
+      effectiveExternalCallsMap.get(assignedPath)!.push(...callsToAssign);
     });
 
     // Add middleware nodes with external calls embedded in labels

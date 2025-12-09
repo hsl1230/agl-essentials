@@ -51,49 +51,59 @@ export class MiddlewareAnalyzer {
     return path.join(this.normalizedWorkspaceFolder, `agl-${this.middlewareName}-middleware`);
   }
 
-  private get aglCoreRoot(): string {
-    return path.join(this.normalizedWorkspaceFolder, 'agl-core');
+
+  /**
+   * Get node_modules path for @opus modules
+   * Falls back to middleware project's node_modules if workspace-level libraries don't exist
+   */
+  private getNodeModulesAglPath(moduleName: string): string {
+    return path.join(this.middlewareRoot, 'node_modules', '@opus', moduleName);
   }
 
-  private get aglUtilsRoot(): string {
-    return path.join(this.normalizedWorkspaceFolder, 'agl-utils');
-  }
-
-  private get aglCacheRoot(): string {
-    return path.join(this.normalizedWorkspaceFolder, 'agl-cache');
-  }
-
-  private get aglLoggerRoot(): string {
-    return path.join(this.normalizedWorkspaceFolder, 'agl-logger');
+  /**
+   * Check if workspace-level library exists (development mode)
+   * If not, use node_modules path (installed dependency mode)
+   */
+  private getAglModuleRoot(moduleName: string): string | undefined {
+    // First try workspace-level (development mode)
+    const workspacePath = path.join(this.normalizedWorkspaceFolder, moduleName);
+    if (fs.existsSync(workspacePath)) {
+      return workspacePath;
+    }
+    
+    // Fall back to node_modules (installed dependency mode)
+    const nodeModulesPath = this.getNodeModulesAglPath(moduleName);
+    if (fs.existsSync(nodeModulesPath)) {
+      return nodeModulesPath;
+    }
+    
+    return undefined;
   }
 
   /**
    * Check if a file path belongs to a low-level library (agl-core, agl-utils, etc.)
    * These files contain infrastructure code rather than business logic
+   * Supports both workspace-level paths (agl-core/...) and node_modules paths (node_modules/@opus/agl-core/...)
    */
   private isLibraryPath(filePath: string): boolean {
     if (!filePath) return false;
     
     const libraryPatterns = [
-      // agl-utils library files
-      /agl-utils[/\\]lib[/\\]/i,
-      /agl-utils[/\\]index\.js$/i,
+      // agl-utils - entire module is infrastructure
+      // Require path separator before module name to avoid matching 'abc_agl-utils'
+      /[/\\]agl-utils[/\\]/i,
       
-      // agl-core utility files
-      /agl-core[/\\]utils[/\\]wrapper[/\\]/i,
-      /agl-core[/\\]utils[/\\]panic/i,
-      /agl-core[/\\]shared[/\\]/i,
-      /agl-core[/\\]index\.js$/i,
+      // agl-core - entire module is infrastructure
+      /[/\\]agl-core[/\\]/i,
       
-      // agl-cache files
-      /agl-cache[/\\]/i,
+      // agl-cache - entire module is infrastructure
+      /[/\\]agl-cache[/\\]/i,
       
-      // agl-logger files
-      /agl-logger[/\\]/i,
+      // agl-logger - entire module is infrastructure
+      /[/\\]agl-logger[/\\]/i,
       
       // Local utils/wrapper in middleware projects
-      /utils[/\\]wrapper[/\\]request[/\\]/i,
-      /utils[/\\]wrapper[/\\]response[/\\]/i,
+      /utils[/\\]wrapper[/\\]/i,
       
       // Shared utility files in middleware projects
       /shared[/\\].*[/\\](wrapper|request|http)/i,
@@ -157,7 +167,7 @@ export class MiddlewareAnalyzer {
       this.analyzeReqTransaction(lines, result.reqTransactionReads, result.reqTransactionWrites, fullPath);
       console.log(`[FlowAnalyzer] Analyzing data usages...`);
       this.analyzeDataUsages(lines, result.dataUsages, fullPath);
-      console.log(`[FlowAnalyzer] Analyzing external calls...`);
+      console.log(`[FlowAnalyzer] Analyzing external calls...`)
       this.analyzeExternalCalls(lines, result.externalCalls, fullPath);
       console.log(`[FlowAnalyzer] Analyzing config deps...`);
       this.analyzeConfigDeps(lines, result.configDeps);
@@ -264,25 +274,34 @@ export class MiddlewareAnalyzer {
   }
 
   private resolveAglModulePath(modulePath: string): string | undefined {
-    const moduleRoots: { [key: string]: string } = {
-      '@opus/agl-core': this.aglCoreRoot,
-      '@opus/agl-utils': this.aglUtilsRoot,
-      '@opus/agl-cache': this.aglCacheRoot,
-      '@opus/agl-logger': this.aglLoggerRoot
+    // Map @opus/agl-xxx to the actual module name
+    const moduleMapping: { [key: string]: string } = {
+      '@opus/agl-core': 'agl-core',
+      '@opus/agl-utils': 'agl-utils',
+      '@opus/agl-cache': 'agl-cache',
+      '@opus/agl-logger': 'agl-logger'
     };
 
     // Check for exact module match first (e.g., @opus/agl-core)
-    if (moduleRoots[modulePath]) {
-      const indexPath = path.join(moduleRoots[modulePath], 'index.js');
-      if (fs.existsSync(indexPath)) {
-        return indexPath;
+    if (moduleMapping[modulePath]) {
+      const root = this.getAglModuleRoot(moduleMapping[modulePath]);
+      if (root) {
+        const indexPath = path.join(root, 'index.js');
+        if (fs.existsSync(indexPath)) {
+          return indexPath;
+        }
       }
       return undefined;
     }
 
     // Handle submodule paths (e.g., @opus/agl-core/shared/authUserCookieDecrypt)
-    for (const [modulePrefix, root] of Object.entries(moduleRoots)) {
+    for (const [modulePrefix, moduleName] of Object.entries(moduleMapping)) {
       if (modulePath.startsWith(modulePrefix + '/')) {
+        const root = this.getAglModuleRoot(moduleName);
+        if (!root) {
+          continue;
+        }
+        
         const subPath = modulePath.substring(modulePrefix.length + 1);
         const basePath = path.join(root, subPath);
         
@@ -447,7 +466,18 @@ export class MiddlewareAnalyzer {
     result.allExternalCalls = [...result.externalCalls];
     result.allConfigDeps = [...result.configDeps];
 
+    // Track already collected file paths to avoid duplicate collection
+    // when same component is referenced from multiple places
+    const collectedPaths = new Set<string>();
+
     const collectFromComponent = (component: ComponentAnalysis) => {
+      // Skip if this component's file has already been collected
+      // This prevents duplicate data when same file is referenced multiple times
+      if (collectedPaths.has(component.filePath)) {
+        return;
+      }
+      collectedPaths.add(component.filePath);
+
       result.allResLocalsReads.push(...component.resLocalsReads);
       result.allResLocalsWrites.push(...component.resLocalsWrites);
       result.allReqTransactionReads.push(...component.reqTransactionReads);
@@ -465,11 +495,11 @@ export class MiddlewareAnalyzer {
       collectFromComponent(component);
     }
 
-    // Deduplicate all aggregated data
-    result.allResLocalsReads = this.deduplicateByPropertyAndSource(result.allResLocalsReads);
-    result.allResLocalsWrites = this.deduplicateByPropertyAndSource(result.allResLocalsWrites);
-    result.allReqTransactionReads = this.deduplicateByPropertyAndSource(result.allReqTransactionReads);
-    result.allReqTransactionWrites = this.deduplicateByPropertyAndSource(result.allReqTransactionWrites);
+    // Deduplicate all aggregated data - removes exact duplicates but keeps all unique source files
+    result.allResLocalsReads = this.deduplicateUsages(result.allResLocalsReads);
+    result.allResLocalsWrites = this.deduplicateUsages(result.allResLocalsWrites);
+    result.allReqTransactionReads = this.deduplicateUsages(result.allReqTransactionReads);
+    result.allReqTransactionWrites = this.deduplicateUsages(result.allReqTransactionWrites);
     result.allDataUsages = this.deduplicateDataUsages(result.allDataUsages);
     result.allExternalCalls = this.deduplicateExternalCalls(result.allExternalCalls);
     result.allConfigDeps = this.deduplicateConfigDeps(result.allConfigDeps);
@@ -498,16 +528,21 @@ export class MiddlewareAnalyzer {
   }
 
   /**
-   * Deduplicate data usages by sourceType, property, type, and source path
+   * Deduplicate data usages (req.query, req.headers, etc.)
+   * Keep one entry per sourceType + property + type + sourcePath combination
+   * This removes exact duplicates but preserves all unique source files
    */
   private deduplicateDataUsages(usages: DataUsage[]): DataUsage[] {
     const seen = new Map<string, DataUsage>();
+    
     for (const usage of usages) {
+      // Key by sourceType + property + type + sourcePath
       const key = `${usage.sourceType}:${usage.property}:${usage.type}:${usage.sourcePath}`;
       if (!seen.has(key)) {
         seen.set(key, usage);
       }
     }
+    
     return Array.from(seen.values());
   }
 
@@ -1118,127 +1153,175 @@ export class MiddlewareAnalyzer {
     }
   }
 
-  private deduplicateByPropertyAndSource(usages: ResLocalsUsage[]): ResLocalsUsage[] {
+  /**
+   * Deduplicate res.locals/req.transaction usages
+   * Keep one entry per property + sourcePath combination
+   * This removes exact duplicates but preserves all unique source files
+   */
+  private deduplicateUsages(usages: ResLocalsUsage[]): ResLocalsUsage[] {
     const seen = new Map<string, ResLocalsUsage>();
+    
     for (const u of usages) {
+      // Key by property + sourcePath (same property in different files = different entries)
       const key = `${u.property}:${u.sourcePath}`;
       if (!seen.has(key)) {
         seen.set(key, u);
       }
     }
+    
     return Array.from(seen.values());
   }
 
   private analyzeExternalCalls(lines: string[], results: ExternalCall[], sourcePath: string): void {
     // Check if this is a library file - we still analyze it but mark the results
     const isLibrary = this.isLibraryPath(sourcePath);
+    
+    // DEBUG: Log when analyzing geo-blocking or inHome-ms
+    const isDebugTarget = sourcePath.includes('geo-blocking') || sourcePath.includes('inHome-ms');
+    if (isDebugTarget) {
+      console.log(`[FlowAnalyzer] DEBUG: Analyzing external calls in: ${sourcePath}`);
+      console.log(`[FlowAnalyzer] DEBUG: isLibrary=${isLibrary}, lines=${lines.length}`);
+    }
 
     // Patterns that capture meaningful template/endpoint names
+    // Note: For multi-line calls, we use [\s\S]*? for non-greedy multi-line matching
+    // Note: (?:\w+\.)? matches any prefix like 'wrapper.', 'avsRequest.', etc. or no prefix
+    // IMPORTANT: Use [\s\S]*? instead of [^,]* to match across line breaks for multi-line function calls
     const patterns: { pattern: RegExp, type: ExternalCall['type'], extractName?: boolean }[] = [
-      // DCQ patterns - capture template name from the last string argument before closing paren
-      { pattern: /(?:wrapper\.)?callAVSDCQTemplate\s*\([^)]*,\s*['"](\w+)['"]\s*\)/g, type: 'dcq', extractName: true },
-      { pattern: /(?:wrapper\.)?callDCQ\s*\([^)]*,\s*['"](\w+)['"]/g, type: 'dcq', extractName: true },
-      { pattern: /(?:wrapper\.)?callAVSDCQSearch\s*\([^)]*,\s*['"](\w+)['"]/g, type: 'dcq', extractName: true },
+      // DCQ patterns - capture template name (last string argument before closing paren)
+      // Pattern matches: callAVSDCQTemplate(..., 'TemplateName') across multiple lines
+      { pattern: /(?:\w+\.)?callAVSDCQTemplate\s*\([\s\S]*?['"](\w+)['"]\s*\)/g, type: 'dcq', extractName: true },
+      { pattern: /(?:\w+\.)?callDCQ\s*\([\s\S]*?['"](\w+)['"][\s\S]*?\)/g, type: 'dcq', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSDCQSearch\s*\([\s\S]*?['"](\w+)['"][\s\S]*?\)/g, type: 'dcq', extractName: true },
       
       // AVS patterns - capture endpoint/action name based on method signature
+      // Use comma-separated matching with [\s\S]*? for multi-line support
       // callAVS(req, res, apiType, method, action, ...) - action is 5th param
-      { pattern: /(?:wrapper\.)?callAVS\s*\([^,]*,[^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVS\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2C(req, res, action, ...) - action is 3rd param
-      { pattern: /(?:wrapper\.)?callAVSB2C\s*\([^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2C\s*\([\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2CWithFullResponse(req, res, action, ...) - action is 3rd param
-      { pattern: /(?:wrapper\.)?callAVSB2CWithFullResponse\s*\([^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2CWithFullResponse\s*\([\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2B(req, res, method, action, ...) - action is 4th param
-      { pattern: /(?:wrapper\.)?callAVSB2B\s*\([^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2B\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2BWithFullResponse(req, res, method, action, ...) - action is 4th param
-      { pattern: /(?:wrapper\.)?callAVSB2BWithFullResponse\s*\([^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2BWithFullResponse\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2BVersioned(req, res, version, method, action, ...) - action is 5th param
-      { pattern: /(?:wrapper\.)?callAVSB2BVersioned\s*\([^,]*,[^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2BVersioned\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       // callAVSB2BVersionedWithFullResponse(req, res, version, method, action, ...) - action is 5th param
-      { pattern: /(?:wrapper\.)?callAVSB2BVersionedWithFullResponse\s*\([^,]*,[^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSB2BVersionedWithFullResponse\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'avs', extractName: true },
       
       // Pinboard patterns - callPinboard(req, res, method, restParams, ...) - no string name, detect the call
-      { pattern: /(?:wrapper\.)?callPinboard\s*\(/g, type: 'pinboard', extractName: false },
+      { pattern: /(?:\w+\.)?callPinboard\s*\(/g, type: 'pinboard', extractName: false },
       
       // Elasticsearch patterns - capture template name based on method signature
       // callAVSESTemplate(req, res, templateName, ...) - templateName is 3rd param
-      { pattern: /(?:wrapper\.)?callAVSESTemplate\s*\([^,]*,[^,]*,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSESTemplate\s*\([\s\S]*?,[\s\S]*?,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
       // callDcqDecoupledESTemplate(req, res, templateName, ...) - templateName is 3rd param
-      { pattern: /(?:wrapper\.)?callDcqDecoupledESTemplate\s*\([^,]*,[^,]*,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
+      { pattern: /(?:\w+\.)?callDcqDecoupledESTemplate\s*\([\s\S]*?,[\s\S]*?,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
       // callAVSESSearch(req, res, indexes, ...) - indexes is array, just detect the call
-      { pattern: /(?:wrapper\.)?callAVSESSearch\s*\(/g, type: 'elasticsearch', extractName: false },
+      { pattern: /(?:\w+\.)?callAVSESSearch\s*\(/g, type: 'elasticsearch', extractName: false },
       // callES(req, res, method, indexes, ...) - indexes is array, just detect the call
-      { pattern: /(?:wrapper\.)?callES\s*\(/g, type: 'elasticsearch', extractName: false },
+      { pattern: /(?:\w+\.)?callES\s*\(/g, type: 'elasticsearch', extractName: false },
       
       // External API patterns - callExternal(req, res, method, url, ...) - url is 4th param
-      { pattern: /(?:wrapper\.)?callExternal\s*\([^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'external', extractName: true },
+      { pattern: /(?:\w+\.)?callExternal\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'external', extractName: true },
       // Also match when url is a variable
-      { pattern: /(?:wrapper\.)?callExternal\s*\([^,]*,[^,]*,[^,]*,\s*(\w+)/g, type: 'external', extractName: true },
+      { pattern: /(?:\w+\.)?callExternal\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*(\w+)/g, type: 'external', extractName: true },
       
       // AVA patterns
-      { pattern: /callAVA\s*\(/g, type: 'ava', extractName: false },
+      { pattern: /(?:\w+\.)?callAVA\s*\(/g, type: 'ava', extractName: false },
       
       // DSF patterns - callDsf(req, res, method, url, ...) - url is 4th param
-      { pattern: /(?:wrapper\.)?callDsf\s*\([^,]*,[^,]*,[^,]*,\s*['"]([^'"]+)['"]/g, type: 'dsf', extractName: true },
-      { pattern: /(?:wrapper\.)?callDsf\s*\([^,]*,[^,]*,[^,]*,\s*(\w+)/g, type: 'dsf', extractName: true },
+      { pattern: /(?:\w+\.)?callDsf\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'dsf', extractName: true },
+      { pattern: /(?:\w+\.)?callDsf\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,\s*(\w+)/g, type: 'dsf', extractName: true },
       
       // Microservice patterns - capture service name
-      { pattern: /(?:wrapper\.)?callAVSMicroservice\s*\([^,]*,\s*['"]([^'"]+)['"]/g, type: 'microservice', extractName: true },
+      { pattern: /(?:\w+\.)?callAVSMicroservice\s*\([\s\S]*?,\s*['"]([^'"]+)['"]/g, type: 'microservice', extractName: true },
       
       // DCQ ES Mapper patterns - method name IS the endpoint name
-      { pattern: /(?:wrapper\.)?callGetAggregatedContentDetail\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetLiveContentMetadata\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetVodContentMetadata\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetLauncherMetadata\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetLiveChannelList\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callSearchSuggestions\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callSearchVodEvents\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callSearchContents\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetLiveInfo\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callGetEpg\s*\(/g, type: 'dcq', extractName: false },
-      { pattern: /(?:wrapper\.)?callESTemplate\s*\([^,]*,[^,]*,[^,]*,\s*['"](\w+)['"]/g, type: 'elasticsearch', extractName: true },
+      { pattern: /(?:\w+\.)?callGetAggregatedContentDetail\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetLiveContentMetadata\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetVodContentMetadata\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetLauncherMetadata\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetLiveChannelList\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callSearchSuggestions\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callSearchVodEvents\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callSearchContents\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetLiveInfo\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callGetEpg\s*\(/g, type: 'dcq', extractName: false },
+      { pattern: /(?:\w+\.)?callESTemplate\s*\([\s\S]*?['"](\w+)['"][\s\S]*?\)/g, type: 'elasticsearch', extractName: true },
     ];
 
     // Use Set for O(1) deduplication
     const seen = new Set<string>();
     results.forEach(e => seen.add(`${e.type}:${e.template || ''}:${e.lineNumber}:${e.sourcePath}`));
 
-    // First pass: detect standard patterns
-    lines.forEach((line, index) => {
-      const lineNumber = index + 1;
+    // Join all lines for multi-line pattern matching
+    const content = lines.join('\n');
 
-      for (const { pattern, type, extractName } of patterns) {
-        pattern.lastIndex = 0;
-        let match;
-        while ((match = pattern.exec(line)) !== null) {
-          let template: string | undefined;
-          
-          if (extractName && match[1]) {
-            // Extract template name from capture group
-            template = match[1];
-          } else if (!extractName) {
-            // Extract method name from the pattern match for methods like callGetAggregatedContentDetail
-            const methodMatch = match[0].match(/call(\w+)\s*\(/);
-            if (methodMatch) {
-              template = methodMatch[1];
-            }
-          }
-          
-          const key = `${type}:${template || ''}:${lineNumber}:${sourcePath}`;
-          
-          if (!seen.has(key)) {
-            seen.add(key);
-            results.push({
-              type,
-              lineNumber,
-              template,
-              codeSnippet: line.trim(),
-              sourcePath,
-              isLibrary
-            });
+    // DEBUG: For debug targets, test specific pattern
+    if (isDebugTarget) {
+      const testPattern = /(?:\w+\.)?callAVSB2BVersioned\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g;
+      console.log(`[FlowAnalyzer] DEBUG: Testing callAVSB2BVersioned pattern on content length: ${content.length}`);
+      testPattern.lastIndex = 0;
+      const testMatch = testPattern.exec(content);
+      if (testMatch) {
+        console.log(`[FlowAnalyzer] DEBUG: Found match: ${testMatch[0].substring(0, 100)}...`);
+        console.log(`[FlowAnalyzer] DEBUG: Captured group: ${testMatch[1]}`);
+      } else {
+        console.log(`[FlowAnalyzer] DEBUG: No match found for callAVSB2BVersioned`);
+        // Check if callAVSB2BVersioned exists at all
+        if (content.includes('callAVSB2BVersioned')) {
+          console.log(`[FlowAnalyzer] DEBUG: callAVSB2BVersioned text EXISTS in content`);
+          // Find the line
+          const lineIdx = lines.findIndex(l => l.includes('callAVSB2BVersioned'));
+          if (lineIdx >= 0) {
+            console.log(`[FlowAnalyzer] DEBUG: Found at line ${lineIdx + 1}: ${lines[lineIdx].trim().substring(0, 80)}`);
           }
         }
       }
-    });
+    }
+
+    // First pass: detect standard patterns (supports multi-line calls)
+    for (const { pattern, type, extractName } of patterns) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(content)) !== null) {
+        let template: string | undefined;
+        
+        // Calculate line number from match position
+        const beforeMatch = content.substring(0, match.index);
+        const lineNumber = (beforeMatch.match(/\n/g) || []).length + 1;
+        
+        if (extractName && match[1]) {
+          // Extract template name from capture group
+          template = match[1];
+        } else if (!extractName) {
+          // Extract method name from the pattern match for methods like callGetAggregatedContentDetail
+          const methodMatch = match[0].match(/call(\w+)\s*\(/);
+          if (methodMatch) {
+            template = methodMatch[1];
+          }
+        }
+        
+        const key = `${type}:${template || ''}:${lineNumber}:${sourcePath}`;
+        
+        if (!seen.has(key)) {
+          seen.add(key);
+          // Get the line for code snippet
+          const snippetLine = lines[lineNumber - 1] || '';
+          results.push({
+            type,
+            lineNumber,
+            template,
+            codeSnippet: snippetLine.trim(),
+            sourcePath,
+            isLibrary
+          });
+        }
+      }
+    }
     
     // Second pass: detect HTTP client calls and extract meaningful names from context
     this.detectHttpCalls(lines, results, seen, sourcePath, isLibrary);
@@ -1246,15 +1329,10 @@ export class MiddlewareAnalyzer {
   
   /**
    * Detect HTTP client calls and extract meaningful endpoint names from context
-   * Skip library files - httpClient calls in wrapper libraries are implementation details
+   * For library files, still detect the calls but mark them as isLibrary
+   * This allows them to show in component details while being filtered in aggregated views
    */
   private detectHttpCalls(lines: string[], results: ExternalCall[], seen: Set<string>, sourcePath: string, isLibrary: boolean = false): void {
-    // Skip HTTP detection in library files - these are implementation details of wrappers
-    // Users care about high-level calls like callAVSDCQTemplate, not the underlying httpClient
-    if (isLibrary) {
-      return;
-    }
-
     const httpPatterns = [
       /aglUtils\.httpClient\s*\(/,
       /aglUtils\.forwardRequest\s*\(/,
@@ -1278,7 +1356,7 @@ export class MiddlewareAnalyzer {
               template: endpointName,
               codeSnippet: line.trim(),
               sourcePath,
-              isLibrary
+              isLibrary  // Mark as library - will be filtered in deduplicateExternalCalls but visible in component details
             });
           }
           break; // Only count once per line
