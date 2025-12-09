@@ -297,35 +297,53 @@ export class FlowAnalyzer {
       }
     });
     
-    // First pass: collect all visible components
-    // We need to know which components are visible before assigning external calls
+    // First pass: collect all visible components AND build path-to-ancestor map in ONE traversal
+    // This is a key optimization - we do both tasks in a single tree walk
     const visibleFilePaths = new Set<string>();
+    const pathToVisibleAncestorMap = new Map<string, string>(); // normalizedPath -> visibleAncestorPath
     
-    const collectVisibleComponents = (
+    const collectVisibleAndBuildAncestorMap = (
       components: ComponentAnalysis[], 
       mwId: string, 
       prefix: string, 
-      isParentExpanded: boolean
+      isParentExpanded: boolean,
+      lastVisiblePath: string
     ) => {
-      if (!isParentExpanded) return;
-      
-      components.forEach((comp, idx) => {
+      for (let idx = 0; idx < components.length; idx++) {
+        const comp = components[idx];
         const compId = prefix ? `${prefix}_c${idx}` : `${mwId}_c${idx}`;
-        if (comp.filePath) {
-          visibleFilePaths.add(comp.filePath);
-          visibleComponentMap.set(comp.filePath, compId);
+        
+        // Track visibility
+        const isVisible = isParentExpanded && comp.filePath;
+        if (isVisible) {
+          visibleFilePaths.add(comp.filePath!);
+          visibleComponentMap.set(comp.filePath!, compId);
         }
         
+        // Build path-to-ancestor map
+        const currentVisiblePath = isVisible ? comp.filePath! : lastVisiblePath;
+        if (comp.filePath) {
+          const normalizedPath = comp.filePath.toLowerCase().replace(/\\/g, '/');
+          pathToVisibleAncestorMap.set(normalizedPath, currentVisiblePath);
+        }
+        
+        // Recursively process children
         const hasChildren = comp.children.length > 0;
         const isExpanded = expandedNodes.has(compId);
         
-        if (hasChildren && isExpanded) {
-          collectVisibleComponents(comp.children, mwId, compId, true);
+        if (hasChildren) {
+          collectVisibleAndBuildAncestorMap(
+            comp.children, 
+            mwId, 
+            compId, 
+            isParentExpanded && isExpanded,
+            currentVisiblePath
+          );
         }
-      });
+      }
     };
     
-    // Collect visible components for all middlewares
+    // Single pass: collect visible components and build ancestor map for all middlewares
     result.middlewares.forEach((mw, index) => {
       const mwId = `MW${index + 1}`;
       const isMwExpanded = !expandedNodes.has(`${mwId}_collapsed`);
@@ -334,9 +352,9 @@ export class FlowAnalyzer {
         visibleFilePaths.add(mw.filePath);
         visibleComponentMap.set(mw.filePath, mwId);
       }
-      // Only collect child components if middleware is expanded
-      if (mw.components.length > 0 && isMwExpanded) {
-        collectVisibleComponents(mw.components, mwId, '', true);
+      
+      if (mw.components.length > 0) {
+        collectVisibleAndBuildAncestorMap(mw.components, mwId, '', isMwExpanded, mw.filePath);
       }
     });
     
@@ -344,57 +362,15 @@ export class FlowAnalyzer {
     // If a component is not visible, bubble up to its visible ancestor
     const effectiveExternalCallsMap = new Map<string, { call: any, extIdx: number }[]>();
     
-    const findDeepestVisibleAncestor = (
-      components: ComponentAnalysis[],
-      targetPath: string,
-      mwFilePath: string,
-      mwId: string,
-      prefix: string,
-      lastVisiblePath: string
-    ): string | null => {
-      for (let idx = 0; idx < components.length; idx++) {
-        const comp = components[idx];
-        const compId = prefix ? `${prefix}_c${idx}` : `${mwId}_c${idx}`;
-        
-        // Update lastVisiblePath if this component is visible
-        const currentVisiblePath = (comp.filePath && visibleFilePaths.has(comp.filePath)) 
-          ? comp.filePath 
-          : lastVisiblePath;
-        
-        // Normalize paths for comparison (handle case sensitivity and path separators)
-        const normalizedCompPath = comp.filePath?.toLowerCase().replace(/\\/g, '/');
-        const normalizedTargetPath = targetPath.toLowerCase().replace(/\\/g, '/');
-        
-        if (normalizedCompPath === normalizedTargetPath) {
-          // Found the target component
-          if (visibleFilePaths.has(comp.filePath!)) {
-            return comp.filePath!; // Component is visible, return it
-          } else {
-            return currentVisiblePath; // Component is not visible, return last visible ancestor
-          }
-        }
-        
-        // Check children
-        if (comp.children.length > 0) {
-          const childResult = findDeepestVisibleAncestor(
-            comp.children,
-            targetPath,
-            mwFilePath,
-            mwId,
-            compId,
-            currentVisiblePath
-          );
-          if (childResult) return childResult;
-        }
-      }
-      return null;
+    // Fast lookup function using the pre-built map - O(1) instead of O(n) tree traversal
+    const findVisibleAncestorFast = (targetPath: string): string | null => {
+      const normalizedTarget = targetPath.toLowerCase().replace(/\\/g, '/');
+      return pathToVisibleAncestorMap.get(normalizedTarget) || null;
     };
     
     // Assign each external call to the deepest visible component
     // For library calls: if source is not visible, do NOT bubble (discard)
     // For application calls: if source is not visible, bubble to visible ancestor
-    // IMPORTANT: A source file may be referenced by multiple middlewares, so we need to
-    // find the visible ancestor in EACH middleware that references it
     allExternalCallsMap.forEach((calls, sourcePath) => {
       // Check if the source path is visible
       const isSourceVisible = visibleFilePaths.has(sourcePath);
@@ -428,31 +404,15 @@ export class FlowAnalyzer {
         return;
       }
       
-      // If the source path is not visible, find visible ancestor in EACH middleware
-      // that references this source file
-      const assignedAncestors = new Set<string>(); // Track to avoid duplicate assignments
+      // If the source path is not visible, find visible ancestor using the pre-built map
+      // This is O(1) lookup instead of O(n) tree traversal
+      const deepestVisible = findVisibleAncestorFast(sourcePath);
       
-      for (let mwIndex = 0; mwIndex < result.middlewares.length; mwIndex++) {
-        const mw = result.middlewares[mwIndex];
-        const mwId = `MW${mwIndex + 1}`;
-        
-        const deepestVisible = findDeepestVisibleAncestor(
-          mw.components,
-          sourcePath,
-          mw.filePath,
-          mwId,
-          '',
-          mw.filePath
-        );
-        
-        if (deepestVisible && !assignedAncestors.has(deepestVisible)) {
-          assignedAncestors.add(deepestVisible);
-          
-          if (!effectiveExternalCallsMap.has(deepestVisible)) {
-            effectiveExternalCallsMap.set(deepestVisible, []);
-          }
-          effectiveExternalCallsMap.get(deepestVisible)!.push(...callsToAssign);
+      if (deepestVisible) {
+        if (!effectiveExternalCallsMap.has(deepestVisible)) {
+          effectiveExternalCallsMap.set(deepestVisible, []);
         }
+        effectiveExternalCallsMap.get(deepestVisible)!.push(...callsToAssign);
       }
     });
 

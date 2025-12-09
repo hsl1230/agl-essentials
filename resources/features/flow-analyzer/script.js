@@ -419,7 +419,8 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
         }
         
         // Add click handlers to nodes - use a more robust selector
-        setTimeout(() => {
+        // Use requestAnimationFrame for faster response instead of setTimeout
+        requestAnimationFrame(() => {
             const nodes = viewport.querySelectorAll('.node');
             nodes.forEach((node) => {
                 node.style.cursor = 'pointer';
@@ -542,7 +543,7 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                     }
                 }
             });
-        }, 200);
+        });
     } catch (error) {
         viewport.innerHTML = `<div class="error">Failed to render diagram: ${error.message}</div>`;
     }
