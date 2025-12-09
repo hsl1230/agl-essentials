@@ -118,7 +118,6 @@ export class MiddlewareAnalyzer {
   public analyzeMiddleware(middlewarePath: string): MiddlewareAnalysis {
     this.analyzedPaths.clear();
     this.analyzedComponents.clear();
-    console.log(`[FlowAnalyzer] Starting analysis of: ${middlewarePath}`);
 
     const result: MiddlewareAnalysis = {
       name: middlewarePath,
@@ -159,28 +158,18 @@ export class MiddlewareAnalyzer {
     try {
       const content = fs.readFileSync(fullPath, 'utf-8');
       const lines = content.split('\n');
-      console.log(`[FlowAnalyzer] File has ${lines.length} lines`);
 
-      console.log(`[FlowAnalyzer] Analyzing res.locals...`);
       this.analyzeResLocals(lines, result.resLocalsReads, result.resLocalsWrites, fullPath);
-      console.log(`[FlowAnalyzer] Analyzing req.transaction...`);
       this.analyzeReqTransaction(lines, result.reqTransactionReads, result.reqTransactionWrites, fullPath);
-      console.log(`[FlowAnalyzer] Analyzing data usages...`);
       this.analyzeDataUsages(lines, result.dataUsages, fullPath);
-      console.log(`[FlowAnalyzer] Analyzing external calls...`)
       this.analyzeExternalCalls(lines, result.externalCalls, fullPath);
-      console.log(`[FlowAnalyzer] Analyzing config deps...`);
       this.analyzeConfigDeps(lines, result.configDeps);
-      console.log(`[FlowAnalyzer] Analyzing requires...`);
       const requires = this.analyzeRequires(lines, fullPath);
       result.internalDeps = requires.map(r => r.modulePath);
       this.findFunctionLocations(lines, result);
 
-      console.log(`[FlowAnalyzer] Analyzing ${requires.length} components...`);
       result.components = this.analyzeComponents(requires, fullPath, 0);
-      console.log(`[FlowAnalyzer] Aggregating component data...`);
       this.aggregateComponentData(result);
-      console.log(`[FlowAnalyzer] Middleware analysis complete`);
 
     } catch (error) {
       console.error(`Error analyzing ${middlewarePath}:`, error);
@@ -326,12 +315,10 @@ export class MiddlewareAnalyzer {
 
   private analyzeComponents(requires: RequireInfo[], parentPath: string, depth: number): ComponentAnalysis[] {
     if (depth >= this.MAX_DEPTH) {
-      console.log(`[FlowAnalyzer] Max depth ${this.MAX_DEPTH} reached, stopping recursion`);
       return [];
     }
 
     const components: ComponentAnalysis[] = [];
-    console.log(`[FlowAnalyzer] Depth ${depth}: Processing ${requires.filter(r => r.resolvedPath && (r.isLocal || r.isAglModule)).length} local/agl requires`);
 
     for (const req of requires) {
       if (!req.resolvedPath) {
@@ -359,7 +346,6 @@ export class MiddlewareAnalyzer {
         }
       } else {
         // Full analysis for new components
-        console.log(`[FlowAnalyzer] Depth ${depth}: Analyzing component: ${req.modulePath}`);
         this.analyzedPaths.add(req.resolvedPath);
         const component = this.analyzeComponent(req, parentPath, depth);
         if (component && component.exists) {
@@ -1175,13 +1161,6 @@ export class MiddlewareAnalyzer {
   private analyzeExternalCalls(lines: string[], results: ExternalCall[], sourcePath: string): void {
     // Check if this is a library file - we still analyze it but mark the results
     const isLibrary = this.isLibraryPath(sourcePath);
-    
-    // DEBUG: Log when analyzing geo-blocking or inHome-ms
-    const isDebugTarget = sourcePath.includes('geo-blocking') || sourcePath.includes('inHome-ms');
-    if (isDebugTarget) {
-      console.log(`[FlowAnalyzer] DEBUG: Analyzing external calls in: ${sourcePath}`);
-      console.log(`[FlowAnalyzer] DEBUG: isLibrary=${isLibrary}, lines=${lines.length}`);
-    }
 
     // Patterns that capture meaningful template/endpoint names
     // Note: For multi-line calls, we use [\s\S]*? for non-greedy multi-line matching
@@ -1259,29 +1238,6 @@ export class MiddlewareAnalyzer {
 
     // Join all lines for multi-line pattern matching
     const content = lines.join('\n');
-
-    // DEBUG: For debug targets, test specific pattern
-    if (isDebugTarget) {
-      const testPattern = /(?:\w+\.)?callAVSB2BVersioned\s*\([\s\S]*?,[\s\S]*?,[\s\S]*?,[\s\S]*?,\s*['"]([^'"]+)['"]/g;
-      console.log(`[FlowAnalyzer] DEBUG: Testing callAVSB2BVersioned pattern on content length: ${content.length}`);
-      testPattern.lastIndex = 0;
-      const testMatch = testPattern.exec(content);
-      if (testMatch) {
-        console.log(`[FlowAnalyzer] DEBUG: Found match: ${testMatch[0].substring(0, 100)}...`);
-        console.log(`[FlowAnalyzer] DEBUG: Captured group: ${testMatch[1]}`);
-      } else {
-        console.log(`[FlowAnalyzer] DEBUG: No match found for callAVSB2BVersioned`);
-        // Check if callAVSB2BVersioned exists at all
-        if (content.includes('callAVSB2BVersioned')) {
-          console.log(`[FlowAnalyzer] DEBUG: callAVSB2BVersioned text EXISTS in content`);
-          // Find the line
-          const lineIdx = lines.findIndex(l => l.includes('callAVSB2BVersioned'));
-          if (lineIdx >= 0) {
-            console.log(`[FlowAnalyzer] DEBUG: Found at line ${lineIdx + 1}: ${lines[lineIdx].trim().substring(0, 80)}`);
-          }
-        }
-      }
-    }
 
     // First pass: detect standard patterns (supports multi-line calls)
     for (const { pattern, type, extractName } of patterns) {

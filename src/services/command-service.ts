@@ -74,7 +74,6 @@ export class CommandService {
                 mapperTreeDataProvider?.highlightTreeNodes(mapperName, viewManager.getView(`aglMappers-${middlewareName}`));
             }),
             vscode.commands.registerCommand('aglEssentials.goToUnitTestFile', async (uri: vscode.Uri) => {
-                console.log('#### uri:', uri);
                 if (!uri) {
                     vscode.window.showErrorMessage('No file selected.');
                     return;
@@ -85,7 +84,6 @@ export class CommandService {
 
                 // Derive the unit test file path
                 const testFilePath = deriveTestFilePath(currentFilePath);
-                console.log('#### testFilePath:', testFilePath);
                 if (!testFilePath) {
                     vscode.window.showErrorMessage('Failed to derive test file path.');
                     return;

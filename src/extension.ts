@@ -40,7 +40,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const middlewareNames = discoverMiddlewares(workspaceFolder);
     // middlewareNames now contains ['proxy', 'content', ...] for every agl-config-<middleware> dir
-    console.log('Available middlewares:', middlewareNames);
+    // Middlewares loaded for quick pick
 
     if (middlewareNames.length === 0) {
         vscode.window.showWarningMessage('No AGL middleware configurations found in the workspace.');

@@ -296,7 +296,7 @@ export class FlowAnalyzer {
         collectLibraryExternalCalls(mw.components);
       }
     });
-
+    
     // First pass: collect all visible components
     // We need to know which components are visible before assigning external calls
     const visibleFilePaths = new Set<string>();
@@ -350,7 +350,7 @@ export class FlowAnalyzer {
       mwFilePath: string,
       mwId: string,
       prefix: string,
-      lastVisiblePath: string // Track the last VISIBLE ancestor, not just expanded
+      lastVisiblePath: string
     ): string | null => {
       for (let idx = 0; idx < components.length; idx++) {
         const comp = components[idx];
@@ -361,10 +361,14 @@ export class FlowAnalyzer {
           ? comp.filePath 
           : lastVisiblePath;
         
-        if (comp.filePath === targetPath) {
+        // Normalize paths for comparison (handle case sensitivity and path separators)
+        const normalizedCompPath = comp.filePath?.toLowerCase().replace(/\\/g, '/');
+        const normalizedTargetPath = targetPath.toLowerCase().replace(/\\/g, '/');
+        
+        if (normalizedCompPath === normalizedTargetPath) {
           // Found the target component
-          if (visibleFilePaths.has(targetPath)) {
-            return targetPath; // Component is visible, return it
+          if (visibleFilePaths.has(comp.filePath!)) {
+            return comp.filePath!; // Component is visible, return it
           } else {
             return currentVisiblePath; // Component is not visible, return last visible ancestor
           }
@@ -378,7 +382,7 @@ export class FlowAnalyzer {
             mwFilePath,
             mwId,
             compId,
-            currentVisiblePath // Pass the last visible path
+            currentVisiblePath
           );
           if (childResult) return childResult;
         }
@@ -389,6 +393,8 @@ export class FlowAnalyzer {
     // Assign each external call to the deepest visible component
     // For library calls: if source is not visible, do NOT bubble (discard)
     // For application calls: if source is not visible, bubble to visible ancestor
+    // IMPORTANT: A source file may be referenced by multiple middlewares, so we need to
+    // find the visible ancestor in EACH middleware that references it
     allExternalCallsMap.forEach((calls, sourcePath) => {
       // Check if the source path is visible
       const isSourceVisible = visibleFilePaths.has(sourcePath);
@@ -409,37 +415,45 @@ export class FlowAnalyzer {
         // Library calls with non-visible source are discarded (not bubbled)
       }
       
-      if (callsToAssign.length === 0) return;
+      if (callsToAssign.length === 0) {
+        return;
+      }
       
-      let assignedPath = sourcePath;
+      // If the source path is visible, assign directly
+      if (isSourceVisible) {
+        if (!effectiveExternalCallsMap.has(sourcePath)) {
+          effectiveExternalCallsMap.set(sourcePath, []);
+        }
+        effectiveExternalCallsMap.get(sourcePath)!.push(...callsToAssign);
+        return;
+      }
       
-      // If the source path is not visible, find visible ancestor for application calls
-      if (!isSourceVisible) {
-        // Find which middleware this path belongs to
-        for (let mwIndex = 0; mwIndex < result.middlewares.length; mwIndex++) {
-          const mw = result.middlewares[mwIndex];
-          const mwId = `MW${mwIndex + 1}`;
+      // If the source path is not visible, find visible ancestor in EACH middleware
+      // that references this source file
+      const assignedAncestors = new Set<string>(); // Track to avoid duplicate assignments
+      
+      for (let mwIndex = 0; mwIndex < result.middlewares.length; mwIndex++) {
+        const mw = result.middlewares[mwIndex];
+        const mwId = `MW${mwIndex + 1}`;
+        
+        const deepestVisible = findDeepestVisibleAncestor(
+          mw.components,
+          sourcePath,
+          mw.filePath,
+          mwId,
+          '',
+          mw.filePath
+        );
+        
+        if (deepestVisible && !assignedAncestors.has(deepestVisible)) {
+          assignedAncestors.add(deepestVisible);
           
-          const deepestVisible = findDeepestVisibleAncestor(
-            mw.components,
-            sourcePath,
-            mw.filePath,
-            mwId,
-            '',
-            mw.filePath
-          );
-          
-          if (deepestVisible) {
-            assignedPath = deepestVisible;
-            break;
+          if (!effectiveExternalCallsMap.has(deepestVisible)) {
+            effectiveExternalCallsMap.set(deepestVisible, []);
           }
+          effectiveExternalCallsMap.get(deepestVisible)!.push(...callsToAssign);
         }
       }
-      
-      if (!effectiveExternalCallsMap.has(assignedPath)) {
-        effectiveExternalCallsMap.set(assignedPath, []);
-      }
-      effectiveExternalCallsMap.get(assignedPath)!.push(...callsToAssign);
     });
 
     // Add middleware nodes with external calls embedded in labels

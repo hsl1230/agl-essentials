@@ -299,26 +299,21 @@ function openFile(filePath, lineNumber, isMiddleware = false, middlewarePath = n
 // Message handling
 window.addEventListener('message', event => {
     const message = event.data;
-    console.log('[FlowAnalyzer WebView] Received message:', message.command);
     
     switch (message.command) {
         case 'analysisResult':
-            console.log('[FlowAnalyzer WebView] Handling analysisResult...');
             try {
                 handleAnalysisResult(message.content);
-                console.log('[FlowAnalyzer WebView] analysisResult handled successfully');
             } catch (error) {
                 console.error('[FlowAnalyzer WebView] Error handling analysisResult:', error);
             }
             break;
         case 'diagramUpdate':
             // Handle diagram-only update (for expand/collapse) - preserve pan/zoom
-            console.log('[FlowAnalyzer WebView] Handling diagramUpdate...');
             try {
                 // Update externalCallsMap for click navigation
                 if (message.content.externalCallsMap) {
                     currentExternalCallsMap = new Map(message.content.externalCallsMap);
-                    console.log('[FlowAnalyzer WebView] Updated externalCallsMap with', currentExternalCallsMap.size, 'entries');
                 }
                 renderMermaidDiagram(message.content.mermaidDiagram, true);
             } catch (error) {
@@ -345,14 +340,6 @@ window.addEventListener('message', event => {
 
 // Handle analysis result
 async function handleAnalysisResult(data) {
-    console.log('[FlowAnalyzer WebView] handleAnalysisResult called with data:', {
-        hasEndpoint: !!data.endpoint,
-        middlewaresCount: data.middlewares?.length,
-        propertiesCount: data.allProperties?.length,
-        hasDiagram: !!data.mermaidDiagram,
-        hasExternalCallsMap: !!data.externalCallsMap
-    });
-    
     currentEndpoint = data.endpoint;
     currentMiddlewares = data.middlewares;
     currentProperties = data.allProperties;
@@ -360,24 +347,15 @@ async function handleAnalysisResult(data) {
     // Update externalCallsMap for click navigation
     if (data.externalCallsMap) {
         currentExternalCallsMap = new Map(data.externalCallsMap);
-        console.log('[FlowAnalyzer WebView] Loaded externalCallsMap with', currentExternalCallsMap.size, 'entries');
     }
     
     try {
-        console.log('[FlowAnalyzer WebView] Rendering endpoint info...');
         renderEndpointInfo(data.endpoint);
-        console.log('[FlowAnalyzer WebView] Rendering mermaid diagram...');
         await renderMermaidDiagram(data.mermaidDiagram);
-        console.log('[FlowAnalyzer WebView] Mermaid diagram rendered!');
-        console.log('[FlowAnalyzer WebView] Rendering middleware chain...');
         renderMiddlewareChain(data.middlewares);
-        console.log('[FlowAnalyzer WebView] Rendering component tree...');
         renderComponentTree(data.middlewares);
-        console.log('[FlowAnalyzer WebView] Rendering data flow...');
         renderDataFlow(data.allProperties, data.middlewares, data.allReqTransactionProperties);
-        console.log('[FlowAnalyzer WebView] Rendering config view...');
         renderConfigView(data.endpoint, data.middlewares);
-        console.log('[FlowAnalyzer WebView] All rendering complete!');
     } catch (error) {
         console.error('[FlowAnalyzer WebView] Error in handleAnalysisResult:', error);
     }
@@ -443,13 +421,11 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
         // Add click handlers to nodes - use a more robust selector
         setTimeout(() => {
             const nodes = viewport.querySelectorAll('.node');
-            console.log('[FlowAnalyzer] Found nodes:', nodes.length);
             nodes.forEach((node) => {
                 node.style.cursor = 'pointer';
                 
                 // Extract node info from id - Mermaid adds "flowchart-" prefix
                 let nodeId = node.id;
-                console.log('[FlowAnalyzer] Raw node ID:', nodeId);
                 
                 // Strip Mermaid prefix if present (e.g., "flowchart-MW1-0" -> "MW1")
                 if (nodeId.startsWith('flowchart-')) {
@@ -460,13 +436,11 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                     // Convert dashes back to underscores for component IDs
                     nodeId = nodeId.replace(/-/g, '_');
                 }
-                console.log('[FlowAnalyzer] Parsed node ID:', nodeId);
                 
                 // Check if it's an external call node: 
                 // Formats: MW{n}_ext{m}, MW{n}_main_ext{m}, MW{n}_c{x}_ext{m}, MW{n}_c{x}_c{y}_ext{m}
                 const extMatch = nodeId.match(/^(MW\d+(?:_main|(?:_c\d+)*)?)_ext(\d+)$/);
                 if (extMatch) {
-                    console.log('[FlowAnalyzer] External call node:', nodeId, 'parentId:', extMatch[1], 'extIdx:', extMatch[2]);
                     const parentNodeId = extMatch[1];
                     const extIndex = parseInt(extMatch[2]);
                     
@@ -475,7 +449,6 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                     if (extCall) {
                         node.addEventListener('click', (e) => {
                             e.stopPropagation();
-                            console.log('[FlowAnalyzer] External call clicked:', extCall);
                             navigateToExternalCall(null, extCall);
                         });
                     }
@@ -485,7 +458,6 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                 // Check if it's a component node: MW{n}_c{...} (e.g., MW1_c0, MW1_c0_c1)
                 const compMatch = nodeId.match(/^(MW\d+(?:_c\d+)+)$/);
                 if (compMatch) {
-                    console.log('[FlowAnalyzer] Component node:', nodeId);
                     const compNodeId = compMatch[1];
                     const nodeLabel = node.querySelector('.nodeLabel')?.textContent || '';
                     const hasToggle = nodeLabel.includes('▶') || nodeLabel.includes('▼');
@@ -505,13 +477,11 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                         // - Middle: detail view
                         
                         if (hasToggle && clickRatio < 0.20) {
-                            console.log('[FlowAnalyzer] Toggle clicked for:', compNodeId);
                             vscode.postMessage({
                                 command: 'toggleComponentExpansion',
                                 nodeId: compNodeId
                             });
                         } else if (hasExternalCalls && clickRatio > 0.80) {
-                            console.log('[FlowAnalyzer] External calls clicked for:', compNodeId);
                             const comp = findComponentByNodeId(compNodeId);
                             if (comp) {
                                 sidebarHistory = [];
@@ -519,7 +489,6 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                                 showExternalCallsSidebar(comp);
                             }
                         } else {
-                            console.log('[FlowAnalyzer] Component text clicked, showing detail:', compNodeId);
                             const comp = findComponentByNodeId(compNodeId);
                             if (comp) {
                                 sidebarHistory = [];
@@ -534,7 +503,6 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                 // Check if it's a middleware node: MW{n} or MW{n}_main
                 const mwMatch = nodeId.match(/^MW(\d+)(?:_main)?$/);
                 if (mwMatch) {
-                    console.log('[FlowAnalyzer] Middleware node:', nodeId);
                     const mwIndex = parseInt(mwMatch[1]) - 1;
                     const mwId = `MW${mwMatch[1]}`;
                     const mw = currentMiddlewares[mwIndex];
@@ -558,18 +526,15 @@ async function renderMermaidDiagram(diagram, preservePosition = false) {
                             // - Middle: detail view
                             
                             if ((hasToggle || hasComponents) && clickRatio < 0.20) {
-                                console.log('[FlowAnalyzer] Toggle clicked for middleware:', mwId);
                                 vscode.postMessage({
                                     command: 'toggleMiddlewareExpansion',
                                     nodeId: mwId
                                 });
                             } else if (hasExternalCalls && clickRatio > 0.80) {
-                                console.log('[FlowAnalyzer] External calls clicked for middleware:', nodeId);
                                 sidebarHistory = [];
                                 currentSidebarItem = null;
                                 showMiddlewareExternalCallsSidebar(mw);
                             } else {
-                                console.log('[FlowAnalyzer] Middleware clicked:', nodeId);
                                 sidebarHistory = [];
                                 showMiddlewareDetailSidebar(mw, false);
                             }
@@ -588,7 +553,6 @@ function findExternalCallByNodeId(parentNodeId, extIndex) {
     // First, try to find from the currentExternalCallsMap (includes bubbled calls)
     const extId = `${parentNodeId}_ext${extIndex}`;
     if (currentExternalCallsMap && currentExternalCallsMap.has(extId)) {
-        console.log('[FlowAnalyzer] Found external call in map:', extId);
         return currentExternalCallsMap.get(extId);
     }
     
@@ -2161,12 +2125,6 @@ function showMiddlewareExternalCallsSidebar(middleware) {
 
 // Show component detail in sidebar
 function showComponentDetailSidebar(component, addToHistory = true) {
-    // DEBUG: Log the component and its externalCalls
-    console.log('[FlowAnalyzer] showComponentDetailSidebar called for:', component.displayName || component.name);
-    console.log('[FlowAnalyzer] Component filePath:', component.filePath);
-    console.log('[FlowAnalyzer] Component externalCalls:', component.externalCalls);
-    console.log('[FlowAnalyzer] Component externalCalls length:', component.externalCalls?.length || 0);
-    
     // Add current to history before switching (if not initial or back navigation)
     if (addToHistory && currentSidebarItem) {
         sidebarHistory.push(currentSidebarItem);
