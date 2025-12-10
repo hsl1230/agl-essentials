@@ -4,6 +4,19 @@
 
 ---
 
+## 📋 Table of Contents
+
+- [Features](#-features)
+- [Getting Started](#-getting-started)
+- [Installation](#-installation)
+- [User Guide](#-user-guide)
+- [Configuration](#️-configuration)
+- [Extension Commands](#-extension-commands)
+- [Keyboard Shortcuts](#️-keyboard-shortcuts)
+- [Contributing](#-contributing)
+
+---
+
 ## 🚀 Features
 
 ### 1. Endpoint Viewer
@@ -49,6 +62,80 @@ A powerful visualization tool for understanding middleware execution flows:
 
 ---
 
+## 🎯 Getting Started
+
+### Prerequisites
+
+This extension requires your workspace to contain AGL middleware configurations. It automatically activates when it detects directories matching the pattern `agl-config-*`.
+
+### First Steps
+
+1. **Open your AGL workspace** - Open a folder containing AGL middleware (e.g., `agl-config-content`, `agl-config-plus`, etc.)
+2. **Find the AGL icon** - Look for the **AGL Essentials** icon in the Activity Bar on the left side of VS Code
+3. **Explore the sidebar** - Click the icon to see Mappers and Endpoints views
+
+---
+
+## 📖 User Guide
+
+### Sidebar Views
+
+When you click the AGL Essentials icon, you'll see two main views:
+
+#### Mappers View
+- Displays all data mappers organized by middleware
+- Click on a mapper to open the **Mapper Viewer** with detailed field mappings
+- Shows mapping structure and data transformations
+
+#### Endpoints View
+- Lists all API endpoints defined in your middleware
+- **HTTP Method Icons**: Visual indicators for request types
+  - 🔵 **GET** - Blue badge
+  - 🟢 **POST** - Green badge  
+  - 🟠 **PUT** - Orange badge
+  - 🔴 **DELETE** - Red badge
+- **Version Labels**: Shows API version (v1.2, v1.5, etc.)
+- **URL Path**: The endpoint route as description
+
+### Endpoint Flow Analysis
+
+This is the most powerful feature for understanding middleware execution:
+
+1. **Open Flow Analysis**:
+   - Right-click on any endpoint → Select **"AGL: Analyze Endpoint Flow"**
+   - Or click the 🔍 search icon on the endpoint
+
+2. **What you'll see**:
+   - **Middleware Pipeline**: Visual flow diagram showing all components
+   - **External Calls**: DCQ templates, AVS calls, httpClient requests
+   - **Data Flow**: `res.locals` and `req.transaction` read/write tracking
+   - **Config Dependencies**: `appCache.getMWareConfig` calls
+
+3. **Navigation**:
+   - Click on any component to open its source file
+   - Expand/collapse nested components
+   - Pan and zoom the flow diagram
+
+### Search in Endpoint
+
+Search for specific patterns within an endpoint's component chain:
+
+1. Right-click on an endpoint → Select **"AGL: Search in Endpoint"**
+2. Enter your search term
+3. Results show matching:
+   - Middleware component names
+   - External call templates
+   - Configuration keys
+   - Data properties
+
+### Go to Unit Test
+
+When editing a middleware JS file:
+- Right-click in the editor → **"Go to Unit Test File"**
+- Automatically navigates to the corresponding test file
+
+---
+
 ## 📝 Usage
 
 ### Open the Endpoint Viewer
@@ -86,6 +173,35 @@ To customize the behavior of **AGL Essentials**, modify the following settings i
 | `AGL Essentials: Open Endpoint Viewer`   | Opens the Endpoint Viewer tree           |
 | `AGL Essentials: Open Mapper Viewer`     | Opens the Mapper Viewer                  |
 | `AGL: Analyze Endpoint Flow`             | Opens the Flow Analyzer for an endpoint  |
+| `AGL: Search in Endpoint`                | Search within endpoint's middleware chain|
+
+---
+
+## ⌨️ Keyboard Shortcuts
+
+| Action | Shortcut |
+| ------ | -------- |
+| Open Command Palette | `Ctrl+Shift+P` (Windows/Linux) / `Cmd+Shift+P` (Mac) |
+| Open Extensions View | `Ctrl+Shift+X` |
+| Toggle Sidebar | `Ctrl+B` |
+
+### Context Menu Actions
+
+| Action | Where | How |
+| ------ | ----- | --- |
+| Analyze Endpoint Flow | Endpoints View | Right-click endpoint → "AGL: Analyze Endpoint Flow" |
+| Search in Endpoint | Endpoints View | Right-click endpoint → "AGL: Search in Endpoint" |
+| Go to Unit Test File | JS Editor | Right-click → "Go to Unit Test File" |
+
+---
+
+## 💡 Tips & Tricks
+
+1. **Quick Analysis**: Use the inline 🔍 icon on endpoints for faster flow analysis
+2. **Deep Dive**: The flow analyzer tracks up to 5 levels of nested component calls
+3. **External Calls**: Look for DCQ, AVS, httpClient calls highlighted in the flow diagram
+4. **Data Tracing**: Track where `res.locals` properties are set and read
+5. **Export Diagrams**: Use the export button to save flow diagrams as SVG/PNG
 
 ---
 
