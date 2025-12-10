@@ -1,6 +1,7 @@
 
 export interface FeatureNode {
   name: string;
+  description?: string;
   filePath?: string;
   children: FeatureNode[];
   command?: string;

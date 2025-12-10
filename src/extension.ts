@@ -35,6 +35,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const viewManager = new ViewManager(context);
     const providerManager = new ProviderManager();
+    providerManager.setExtensionContext(context);
 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
     if (!workspaceFolder) {
