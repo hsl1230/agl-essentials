@@ -2,7 +2,7 @@
   "name": "agl-essentials",
   "displayName": "AGL Essentials",
   "description": "A VS Code extension for AGL development, including Mapper Viewer and Endpoint Viewer.",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "publisher": "henry-huang",
   "engines": {
     "vscode": "^1.99.3"
@@ -192,14 +192,24 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run clean && npm run esbuild-base -- --production",
+    "clean": "rm -rf out",
+    "esbuild-base": "node esbuild.js",
+    "compile": "npm run esbuild-base",
+    "watch": "npm run esbuild-base -- --watch",
+    "compile:tsc": "tsc -p ./",
+    "watch:tsc": "tsc -watch -p ./",
     "package": "vsce package"
   },
   "devDependencies": {
+    "@types/acorn": "^4.0.6",
     "@types/node": "^20.19.25",
     "@types/vscode": "^1.99.1",
+    "esbuild": "^0.24.2",
     "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "acorn": "^8.15.0",
+    "estree-walker": "^3.0.3"
   }
 }
