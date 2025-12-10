@@ -101,6 +101,10 @@ function initializeControls() {
         vscode.postMessage({ command: 'refreshAnalysis' });
     });
     
+    document.getElementById('search-btn')?.addEventListener('click', () => {
+        vscode.postMessage({ command: 'searchInEndpoint' });
+    });
+    
     document.getElementById('zoom-in-btn')?.addEventListener('click', () => {
         zoomLevel = Math.min(zoomLevel + 0.25, 5);
         applyZoom();

@@ -130,6 +130,11 @@
       {
         "command": "aglEssentials.goToUnitTestFile",
         "title": "Go to Unit Test File"
+      },
+      {
+        "command": "aglEssentials.searchInEndpoint",
+        "title": "AGL: Search in Endpoint",
+        "icon": "$(search)"
       }
     ],
     "themes": [
@@ -180,6 +185,11 @@
           "command": "aglEssentials.analyzeEndpointFlow",
           "when": "viewItem == endpointNode",
           "group": "inline"
+        },
+        {
+          "command": "aglEssentials.searchInEndpoint",
+          "when": "viewItem == endpointNode",
+          "group": "navigation"
         }
       ],
       "editor/context": [

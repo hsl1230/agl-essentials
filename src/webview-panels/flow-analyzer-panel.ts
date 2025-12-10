@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { FlowAnalyzer } from '../analyzers/flow-analyzer';
 import { EndpointConfig, FlowAnalysisResult } from '../models/flow-analyzer-types';
+import { EndpointSearchService } from '../services/endpoint-search-service';
 import { AbstractPanel } from './abstract-panel';
 
 export class FlowAnalyzerPanel extends AbstractPanel {
@@ -265,8 +266,25 @@ export class FlowAnalyzerPanel extends AbstractPanel {
         case 'openConfigFile':
           await this.openConfigFile(message.configType, message.configKey);
           break;
+
+        case 'searchInEndpoint':
+          await this.searchInEndpoint(message.searchQuery);
+          break;
       }
     };
+  }
+
+  /**
+   * Search within endpoint-related files
+   */
+  private async searchInEndpoint(searchQuery?: string): Promise<void> {
+    if (!this.currentEndpoint) {
+      vscode.window.showErrorMessage('No endpoint selected for search.');
+      return;
+    }
+
+    const searchService = new EndpointSearchService(this.workspaceFolder, this.middlewareName);
+    await searchService.searchInEndpoint(this.currentEndpoint, searchQuery);
   }
 
   private async openMiddlewareFile(middlewarePath: string, lineNumber?: number): Promise<void> {

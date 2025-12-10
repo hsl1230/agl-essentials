@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { deriveTestFilePath } from '../shared';
+import { EndpointSearchService } from './endpoint-search-service';
 import { FeatureViewerManager } from './feature-viewer-manager';
 import { ProviderManager } from './provider-manager';
 import { ViewManager } from './view-manager';
@@ -25,6 +26,7 @@ export class CommandService implements vscode.Disposable {
             this.registerOpenCustomPanicConfigCommand(),
             this.registerOpenEndpointDetailsCommand(),
             this.registerAnalyzeEndpointFlowCommand(),
+            this.registerSearchInEndpointCommand(),
             this.registerHighlightNodeCommand(viewManager, providerManager),
             this.registerGoToUnitTestFileCommand()
         );
@@ -94,6 +96,47 @@ export class CommandService implements vscode.Disposable {
             }
             
             this.featureViewerManager.openFeatureViewer('flow-analyzer', endpoint, middlewareName);
+        });
+    }
+
+    private registerSearchInEndpointCommand(): vscode.Disposable {
+        return vscode.commands.registerCommand('aglEssentials.searchInEndpoint', async (arg1, arg2) => {
+            // Support two calling patterns:
+            // 1. From context menu: arg1 = FeatureNode with endpointData
+            // 2. From webview/direct: arg1 = endpoint, arg2 = middlewareName
+            let endpoint: any;
+            let middlewareName: string;
+            
+            if (arg1?.endpointData) {
+                // Called from context menu - arg1 is FeatureNode
+                endpoint = arg1.endpointData;
+                middlewareName = arg1.arguments?.[1] || arg2;
+            } else {
+                // Called directly with endpoint object
+                endpoint = arg1;
+                middlewareName = arg2;
+            }
+            
+            if (!endpoint || !middlewareName) {
+                vscode.window.showErrorMessage('Missing endpoint or middleware information');
+                return;
+            }
+            
+            const searchService = new EndpointSearchService(this.workspaceFolder, middlewareName);
+            
+            // Show summary and prompt for search
+            const summary = searchService.getSearchSummary(endpoint);
+            const message = `Search in ${summary.middlewareCount} middleware(s) and ${summary.componentCount} component(s) (${summary.totalFiles} files total)`;
+            
+            const searchQuery = await vscode.window.showInputBox({
+                prompt: message,
+                placeHolder: 'Enter search string...',
+                title: `Search in ${endpoint.endpointUri}`
+            });
+
+            if (searchQuery) {
+                await searchService.searchInEndpoint(endpoint, searchQuery);
+            }
         });
     }
 
