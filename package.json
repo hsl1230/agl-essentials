@@ -1,9 +1,10 @@
 {
   "name": "agl-essentials",
   "displayName": "AGL Essentials",
-  "description": "A VS Code extension for AGL development, including Mapper Viewer and Endpoint Viewer.",
+  "description": "A VS Code extension for AGL middleware development. Features include Endpoint Viewer, Mapper Viewer, Flow Analyzer with component analysis, external call detection, and data flow tracking.",
   "version": "0.4.0",
   "publisher": "henry-huang",
+  "icon": "resources/icon.png",
   "engines": {
     "vscode": "^1.99.3"
   },
@@ -16,7 +17,8 @@
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:**/agl-config-*/files/customRoutes.json"
+    "workspaceContains:**/agl-config-*/files/customRoutes.json",
+    "workspaceContains:agl-config-*/files/customRoutes.json"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -215,6 +217,7 @@
     "@types/acorn": "^4.0.6",
     "@types/node": "^20.19.25",
     "@types/vscode": "^1.99.1",
+    "canvas": "^3.2.0",
     "esbuild": "^0.24.2",
     "typescript": "^4.9.4"
   },

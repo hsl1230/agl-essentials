@@ -313,10 +313,10 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       }
 
       const doc = await vscode.workspace.openTextDocument(filePath);
-      // Use ViewColumn.Beside to open next to webview, preserving webview focus
+      // Open code in ViewColumn.One (left side), webview stays in ViewColumn.Two (right side)
       const editor = await vscode.window.showTextDocument(doc, {
         viewColumn: vscode.ViewColumn.One,
-        preserveFocus: false, // Focus the editor but don't close webview
+        preserveFocus: false,
         preview: true
       });
 
@@ -509,7 +509,12 @@ export class FlowAnalyzerPanel extends AbstractPanel {
     }
 
     const doc = await vscode.workspace.openTextDocument(configPath);
-    const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+    // Open config in ViewColumn.One (left side)
+    const editor = await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.One,
+      preserveFocus: false,
+      preview: true
+    });
 
     // If a specific key is provided, try to find and highlight it
     if (configKey) {

@@ -62,7 +62,8 @@ export class MapperPanel extends AbstractPanel {
         const filePath = path.join(this.workspaceFolder, this.fullMiddlewareName, message.filePath);
         try {
           const fileUri = vscode.Uri.file(filePath);
-          await vscode.commands.executeCommand('vscode.open', fileUri);
+          const doc = await vscode.workspace.openTextDocument(fileUri);
+          await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preview: true });
         } catch (error: any) {
           vscode.window.showErrorMessage(`Failed to open file: ${filePath}. Error: ${error.message}`);
         }

@@ -35,7 +35,7 @@ export abstract class AbstractPanel implements vscode.Disposable {
    */
   public createPanel(): vscode.WebviewPanel {
     if (this.panel) {
-      this.panel.reveal(vscode.ViewColumn.One);
+      this.panel.reveal(vscode.ViewColumn.Two);
       return this.panel;
     }
 
@@ -45,7 +45,7 @@ export abstract class AbstractPanel implements vscode.Disposable {
     const panel = vscode.window.createWebviewPanel(
       this.featureName,
       this.title,
-      vscode.ViewColumn.One,
+      vscode.ViewColumn.Two,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
