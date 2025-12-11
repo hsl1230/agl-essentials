@@ -32,7 +32,7 @@ export class MapperPanel extends AbstractPanel {
     }
 
     try {
-      this.panel?.reveal(vscode.ViewColumn.One);
+      this.panel?.reveal(vscode.ViewColumn.Two);
       const fileContent = fs.readFileSync(filePath, 'utf8');
       this.panel?.webview.postMessage({ command: 'fileContent', content: fileContent, mapConfig });
       vscode.commands.executeCommand('aglEssentials.highlightNode', mapperName, this.middlewareName);

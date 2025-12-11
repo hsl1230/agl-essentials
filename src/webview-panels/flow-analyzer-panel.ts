@@ -33,7 +33,7 @@ export class FlowAnalyzerPanel extends AbstractPanel {
   private log(message: string): void {
     const timestamp = new Date().toISOString();
     FlowAnalyzerPanel.outputChannel.appendLine(`[${timestamp}] ${message}`);
-    FlowAnalyzerPanel.outputChannel.show(true); // Show the output channel
+    // FlowAnalyzerPanel.outputChannel.show(true); // Show the output channel
   }
 
   public get title(): string {

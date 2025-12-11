@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { activateConfig } from './activate-config';
-import { activateDefaultMappersAndEndpoints } from './activate-default-mappers-endpoints';
+import { activateMappersAndEndpoints } from './activate-mappers-endpoints';
 import { activateMiddleware } from './activate-middleware';
 import { HighlightDecorationProvider } from './providers/highlight-decoration-provider';
 import { CommandService } from './services/command-service';
@@ -64,10 +64,28 @@ export function activate(context: vscode.ExtensionContext) {
     const nanoConfigService = activateConfig('nanoConfigKey');
     const panicConfigService = activateConfig('panicConfigKey');
 
-    activateDefaultMappersAndEndpoints(viewManager, providerManager, workspaceFolder, middlewareName);
-
-    // Register commands
+    // Register commands early so they're available during loading
     commandService.registerCommands(viewManager, providerManager);
+
+    // Activate mappers and endpoints for all middlewares asynchronously in the background
+    const activateAllMappersAndEndpoints = async () => {
+        for (const mwName of sortedMiddlewareNames) {
+            // Use setTimeout to yield to the event loop and keep UI responsive
+            await new Promise<void>(resolve => {
+                setTimeout(() => {
+                    try {
+                        activateMappersAndEndpoints(viewManager, providerManager, workspaceFolder, mwName);
+                    } catch (error) {
+                        console.error(`Failed to activate middleware ${mwName}:`, error);
+                    }
+                    resolve();
+                }, 10); // Small delay to allow UI updates
+            });
+        }
+    };
+    
+    // Start background activation without blocking extension activation
+    activateAllMappersAndEndpoints();
 
     context.subscriptions.push(
         viewManager,

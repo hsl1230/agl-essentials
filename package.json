@@ -4,7 +4,7 @@
   "description": "A VS Code extension for AGL middleware development. Features include Endpoint Viewer, Mapper Viewer, Flow Analyzer with component analysis, external call detection, and data flow tracking.",
   "version": "0.4.0",
   "publisher": "henry-huang",
-  "icon": "resources/icon.png",
+  "icon": "resources/agl-icon.png",
   "engines": {
     "vscode": "^1.99.3"
   },
