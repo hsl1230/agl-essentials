@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { FlowAnalyzer } from '../analyzers/flow-analyzer';
 import { EndpointConfig, FlowAnalysisResult } from '../models/flow-analyzer-types';
+import { EndpointSearchService } from '../services/endpoint-search-service';
 import { AbstractPanel } from './abstract-panel';
 
 export class FlowAnalyzerPanel extends AbstractPanel {
@@ -32,7 +33,7 @@ export class FlowAnalyzerPanel extends AbstractPanel {
   private log(message: string): void {
     const timestamp = new Date().toISOString();
     FlowAnalyzerPanel.outputChannel.appendLine(`[${timestamp}] ${message}`);
-    FlowAnalyzerPanel.outputChannel.show(true); // Show the output channel
+    // FlowAnalyzerPanel.outputChannel.show(true); // Show the output channel
   }
 
   public get title(): string {
@@ -265,8 +266,25 @@ export class FlowAnalyzerPanel extends AbstractPanel {
         case 'openConfigFile':
           await this.openConfigFile(message.configType, message.configKey);
           break;
+
+        case 'searchInEndpoint':
+          await this.searchInEndpoint(message.searchQuery);
+          break;
       }
     };
+  }
+
+  /**
+   * Search within endpoint-related files
+   */
+  private async searchInEndpoint(searchQuery?: string): Promise<void> {
+    if (!this.currentEndpoint) {
+      vscode.window.showErrorMessage('No endpoint selected for search.');
+      return;
+    }
+
+    const searchService = new EndpointSearchService(this.workspaceFolder, this.middlewareName);
+    await searchService.searchInEndpoint(this.currentEndpoint, searchQuery);
   }
 
   private async openMiddlewareFile(middlewarePath: string, lineNumber?: number): Promise<void> {
@@ -295,10 +313,10 @@ export class FlowAnalyzerPanel extends AbstractPanel {
       }
 
       const doc = await vscode.workspace.openTextDocument(filePath);
-      // Use ViewColumn.Beside to open next to webview, preserving webview focus
+      // Open code in ViewColumn.One (left side), webview stays in ViewColumn.Two (right side)
       const editor = await vscode.window.showTextDocument(doc, {
         viewColumn: vscode.ViewColumn.One,
-        preserveFocus: false, // Focus the editor but don't close webview
+        preserveFocus: false,
         preview: true
       });
 
@@ -491,7 +509,12 @@ export class FlowAnalyzerPanel extends AbstractPanel {
     }
 
     const doc = await vscode.workspace.openTextDocument(configPath);
-    const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+    // Open config in ViewColumn.One (left side)
+    const editor = await vscode.window.showTextDocument(doc, {
+      viewColumn: vscode.ViewColumn.One,
+      preserveFocus: false,
+      preview: true
+    });
 
     // If a specific key is provided, try to find and highlight it
     if (configKey) {

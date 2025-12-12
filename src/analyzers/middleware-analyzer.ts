@@ -5,7 +5,7 @@ import {
   MiddlewareAnalysis
 } from '../models/flow-analyzer-types';
 import { normalizePath } from '../shared';
-import { ComponentAnalyzer } from './component-analyzer';
+import { ComponentAnalyzer } from './component-analyzer-acorn';
 
 /**
  * MiddlewareAnalyzer - Wrapper around ComponentAnalyzer for middleware entry points

@@ -15,6 +15,11 @@ export abstract class TreeDataProvider implements vscode.TreeDataProvider<Featur
             element.children.length ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
         );
 
+        // Set description if available (displayed after the label)
+        if (element.description) {
+            treeItem.description = element.description;
+        }
+
         if (element.command) {
             treeItem.command = {
                 command: element.command,

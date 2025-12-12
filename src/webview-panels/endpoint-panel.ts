@@ -37,7 +37,8 @@ export class EndpointPanel extends AbstractPanel {
           if (!fs.existsSync(fullPath)) {
             fullPath = path.join(this.workspaceFolder, this.fullMiddlewareName, `${message.middlewarePath}/index.js`);
           }
-          vscode.commands.executeCommand('vscode.open', vscode.Uri.file(fullPath));
+          const doc = await vscode.workspace.openTextDocument(fullPath);
+          await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preview: true });
         } catch (error: any) {
           this.panel?.webview.postMessage({ command: 'error', message: `Failed to open the middleware ${message.middlewarePath}: ${error.message}` });
         }

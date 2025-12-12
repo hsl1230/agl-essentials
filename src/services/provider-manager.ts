@@ -5,6 +5,11 @@ import { MapperTreeDataProvider } from "../providers/mapper-tree-data-provider";
 export class ProviderManager implements vscode.Disposable {
   private mapperTreeDataProviderMap = new Map<string, MapperTreeDataProvider>();
   private endpointTreeDataProviderMap = new Map<string, EndpointTreeDataProvider>();
+  private extensionContext: vscode.ExtensionContext | undefined;
+
+  setExtensionContext(context: vscode.ExtensionContext): void {
+    this.extensionContext = context;
+  }
 
   createMapperTreeDataProvider(workspaceFolder: string, middlewareName: string): MapperTreeDataProvider {
     const existing = this.mapperTreeDataProviderMap.get(middlewareName);
@@ -21,7 +26,10 @@ export class ProviderManager implements vscode.Disposable {
     if (existing) {
       return existing;
     }
-    const provider = new EndpointTreeDataProvider(workspaceFolder, middlewareName);
+    if (!this.extensionContext) {
+      throw new Error('Extension context not set. Call setExtensionContext first.');
+    }
+    const provider = new EndpointTreeDataProvider(workspaceFolder, middlewareName, this.extensionContext);
     this.endpointTreeDataProviderMap.set(middlewareName, provider);
     return provider;
   }
